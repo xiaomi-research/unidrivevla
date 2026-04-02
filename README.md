@@ -36,6 +36,11 @@ April 2, 2026
 - [Abstract](#abstract)
 - [Architecture](#architecture)
 - [Getting Started](#getting-started)
+  - [Data Preparation](docs/data_preparation.md)
+  - [Installation](docs/installation.md)
+  - [VLM Pretraining](docs/vlm_pretraining.md)
+  - [Training and Evaluation on nuScenes](docs/train_eval_nuscenes.md)
+  - [Training and Evaluation on Bench2Drive](docs/train_eval_bench2drive.md)
 - [Checkpoints](#checkpoints)
 - [Contact](#contact)
 - [Acknowledgement](#acknowledgement)
@@ -66,6 +71,7 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
 
 - [Data Preparation](docs/data_preparation.md)
 - [Installation](docs/installation.md)
+- [VLM Pretraining](docs/vlm_pretraining.md)
 - [Training and Evaluation on nuScenes](docs/train_eval_nuscenes.md)
 - [Training and Evaluation on Bench2Drive](docs/train_eval_bench2drive.md)
 
@@ -77,8 +83,8 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
 
 | Method | Backbone | L2@1s ↓ | L2@2s ↓ | L2@3s ↓ | Avg. L2 ↓ | Col@1s ↓ | Col@2s ↓ | Col@3s ↓ | Avg. Col ↓ | Config | Weights |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| UniDriveVLA-Base | Qwen3-VL-2B | 0.28 | 0.51 | 0.82 | 0.54 | 0.08 | 0.13 | 0.31 | 0.17 | [config](projects/configs/unidrivevla/unified_decoder_stage1_exp168_driving_deepstack_lora_2b_cotraining.py) | - |
-| UniDriveVLA-Large | Qwen3-VL-8B | 0.27 | 0.49 | 0.77 | 0.51 | 0.03 | 0.10 | 0.21 | 0.11 | [config](projects/configs/unidrivevla/unified_decoder_stage1_exp170_driving_deepstack_lora_8b_cotraining.py) | - |
+| UniDriveVLA-Base | Qwen3-VL-2B | 0.28 | 0.51 | 0.82 | 0.54 | 0.08 | 0.13 | 0.31 | 0.17 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_stage2_2b.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage3) |
+| UniDriveVLA-Large | Qwen3-VL-8B | 0.27 | 0.49 | 0.77 | 0.51 | 0.03 | 0.10 | 0.21 | 0.11 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_stage2_8b.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage3) |
 
 > Bench2Drive Closed-Loop Results
 
@@ -105,7 +111,7 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
   </thead>
   <tbody>
     <tr>
-      <td><b>UniDriveVLA</b></td>
+      <td><b>UniDriveVLA</b> (<a href="https://huggingface.co/owl10/UniDriveVLA_B2D_Base_Stage3">weights</a>)</td>
       <td>78.37</td>
       <td>51.82</td>
       <td>198.86</td>
@@ -122,10 +128,24 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
 
 > Perception Results on nuScenes val
 
-| Method | Det NDS ↑ | Det mAP ↑ | Map mAP ↑ |
-|:---:|:---:|:---:|:---:|
-| UniDriveVLA-Base | 0.434 | 0.397 | 0.520 |
-| UniDriveVLA-Large | 0.460 | 0.407 | 0.535 |
+| Method | Det NDS ↑ | Det mAP ↑ | Map mAP ↑ | Weights |
+|:---:|:---:|:---:|:---:|:---:|
+| UniDriveVLA-Base | 0.434 | 0.397 | 0.520 | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage3) |
+| UniDriveVLA-Large | 0.460 | 0.407 | 0.535 | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage3) |
+
+> All Model Weights (Stage 1 & 2 are intermediate checkpoints for progressive training; Stage 3 is the final model)
+
+| Model | HuggingFace |
+|:---:|:---:|
+| UniDriveVLA-Base (nuScenes) Stage 1 | [owl10/UniDriveVLA_Nusc_Base_Stage1](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage1) |
+| UniDriveVLA-Base (nuScenes) Stage 2 | [owl10/UniDriveVLA_Nusc_Base_Stage2](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage2) |
+| UniDriveVLA-Base (nuScenes) **Stage 3** | [owl10/UniDriveVLA_Nusc_Base_Stage3](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage3) |
+| UniDriveVLA-Large (nuScenes) Stage 1 | [owl10/UniDriveVLA_Nusc_Large_Stage1](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage1) |
+| UniDriveVLA-Large (nuScenes) Stage 2 | [owl10/UniDriveVLA_Nusc_Large_Stage2](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage2) |
+| UniDriveVLA-Large (nuScenes) **Stage 3** | [owl10/UniDriveVLA_Nusc_Large_Stage3](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage3) |
+| UniDriveVLA-Base (Bench2Drive) Stage 1 | [owl10/UniDriveVLA_B2D_Base_Stage1](https://huggingface.co/owl10/UniDriveVLA_B2D_Base_Stage1) |
+| UniDriveVLA-Base (Bench2Drive) Stage 2 | [owl10/UniDriveVLA_B2D_Base_Stage2](https://huggingface.co/owl10/UniDriveVLA_B2D_Base_Stage2) |
+| UniDriveVLA-Base (Bench2Drive) **Stage 3** | [owl10/UniDriveVLA_B2D_Base_Stage3](https://huggingface.co/owl10/UniDriveVLA_B2D_Base_Stage3) |
 
 ---
 
@@ -139,10 +159,10 @@ If you have any questions, please contact [Yongkang Li](https://owl-10.github.io
 
 UniDriveVLA is built upon the following outstanding open-source works:
 
-- [Openpi](https://github.com/Physical-Intelligence/openpi) — VLA training framework
 - [InternVLA-A1](https://github.com/InternRobotics/InternVLA-A1) — VLA model for robotic manipulation
-- [SparseDrive](https://github.com/swc-17/SparseDrive) — Sparse 3D perception framework for autonomous driving
 - [HiP-AD](https://github.com/nullmax-vision/HiP-AD) — Hierarchical planning for autonomous driving
+- [SparseDrive](https://github.com/swc-17/SparseDrive) — Sparse 3D perception framework for autonomous driving
+- [Openpi](https://github.com/Physical-Intelligence/openpi) — VLA training framework
 - [Bench2Drive](https://github.com/Thinklab-SJTU/Bench2Drive) — Closed-loop evaluation in CARLA
   
 

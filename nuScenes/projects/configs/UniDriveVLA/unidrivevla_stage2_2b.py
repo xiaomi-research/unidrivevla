@@ -7,6 +7,7 @@ occworld_vae_path = os.environ.get("OCCWORLD_VAE_PATH", "/path/to/ckpt/occvae_la
 deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "/path/to/zero_configs/adam_zero1_bf16.json")
 stage1_checkpoint = os.environ.get("STAGE1_CHECKPOINT", "/path/to/stage1/checkpoint/mp_rank_00_model_states.pt")
 data_infos_root = os.environ.get("DATA_INFOS_ROOT", "data/infos")
+num_gpus = int(os.environ.get("NUM_GPUS", 32))
 # ==============================
 
 # ====================================================================
@@ -30,7 +31,6 @@ dist_params = dict(backend="nccl")
 log_level = "INFO"
 work_dir = None
 total_batch_size = 128
-num_gpus = 32
 batch_size = 4
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
 num_epochs = 15

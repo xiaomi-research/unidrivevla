@@ -337,7 +337,7 @@ class QwenVL3APlanningHead(nn.Module):
             self.motion_proj_down.to(target_dtype)
         self.unified_decoder.to(target_dtype)
         self.fusion_weight_generators.to(target_dtype)
-
+        self.feature_map_proj.to(target_dtype)
         if hasattr(self.qwen3_vl_with_expert.qwen3_vl, 'lm_head'):
             self.qwen3_vl_with_expert.qwen3_vl.lm_head.requires_grad_(False)
 

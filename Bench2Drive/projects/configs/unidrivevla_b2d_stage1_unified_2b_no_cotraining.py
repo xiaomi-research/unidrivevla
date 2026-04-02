@@ -7,6 +7,7 @@ import os
 project_dir = os.environ.get("PROJECT_DIR", "/path/to/unidrivevla/Bench2Drive")
 vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/Qwen3-VL-2B-Instruct")
 deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", os.path.join(os.path.dirname(project_dir), "zero_configs/adam_zero1_bf16.json"))
+num_gpus = int(os.environ.get("NUM_GPUS", 64))
 # ==============================
 
 log_level = "INFO"
@@ -14,8 +15,6 @@ dist_params = dict(backend="nccl")
 
 plugin = True
 plugin_dir = "projects/mmdet3d_plugin/"
-
-num_gpus = 64
 batch_size = 4
 num_iters_per_epoch = int(234769 // (num_gpus * batch_size))
 num_epochs = 10  # Main repo Stage1: 30 epochs, B2D adjusted

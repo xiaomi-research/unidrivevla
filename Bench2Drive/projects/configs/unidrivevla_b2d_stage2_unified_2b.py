@@ -1,10 +1,13 @@
+import os
+# ===== User Configuration =====
+num_gpus = int(os.environ.get("NUM_GPUS", 64))
+# ==============================
+
 log_level = "INFO"
 dist_params = dict(backend="nccl")
 
 plugin = True
 plugin_dir = "projects/mmdet3d_plugin/"
-
-num_gpus = 64
 batch_size = 4
 num_iters_per_epoch = int(234769 // (num_gpus * batch_size))
 num_epochs = 5

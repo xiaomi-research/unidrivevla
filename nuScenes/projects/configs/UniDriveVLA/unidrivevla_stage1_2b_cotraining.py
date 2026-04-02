@@ -2,11 +2,12 @@ _base_ = ["../_base_/default_runtime.py"]
 
 import os
 # ===== User Configuration =====
-vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/Qwen3-VL-2B-Instruct")
-occworld_vae_path = os.environ.get("OCCWORLD_VAE_PATH", "/path/to/ckpt/occvae_latest.pth")
-deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "/path/to/zero_configs/adam_zero1_bf16.json")
-driving_jsonl_root = os.environ.get("DRIVING_JSONL_ROOT", "/path/to/lyk_datasets_json")
+vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/UniDriveVLA_Nusc_Large_Stage1")
+occworld_vae_path = os.environ.get("OCCWORLD_VAE_PATH", "/path/to/occvae_latest.pth")  # download from https://drive.google.com/drive/folders/1D1HugOG7JurEqmnQo4XbW_-Ji0chEq-e
+deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "zero_configs/adam_zero1_bf16.json")
+driving_jsonl_root = os.environ.get("DRIVING_JSONL_ROOT", "/path/to/driving_jsonl")  # jsonl files packed at max_length=2048, see vqa_evaluation/LingoQA and DriveLM for reference
 data_infos_root = os.environ.get("DATA_INFOS_ROOT", "data/infos")
+num_gpus = int(os.environ.get("NUM_GPUS", 32))
 # ==============================
 
 # ====================================================================
@@ -29,7 +30,6 @@ dist_params = dict(backend="nccl")
 log_level = "INFO"
 work_dir = None
 total_batch_size = 128
-num_gpus = 32
 batch_size = 4
 num_iters_per_epoch = int(length[version] // (num_gpus * batch_size))
 num_epochs = 30
@@ -503,9 +503,9 @@ ar_dataset_cfg = dict(
     enabled=True,
     # 驾驶数据
     jsonl_paths=[
-            os.path.join(driving_jsonl_root, 'qa_dataset_lingoqa_clean_packed2048.jsonl'), #26319
-            os.path.join(driving_jsonl_root, 'drivelm_converted.with_prefix_packed2048.jsonl'), #4071
-            os.path.join(driving_jsonl_root, 'senna_final_reordered_updated_token_fixed_packed2048.jsonl'), # 27885
+            os.path.join(driving_jsonl_root, 'qa_dataset_lingoqa_clean_packed2048.jsonl'),       # LingoQA, ~26319 samples
+            os.path.join(driving_jsonl_root, 'drivelm_converted.with_prefix_packed2048.jsonl'),  # DriveLM, ~4071 samples
+            os.path.join(driving_jsonl_root, 'senna_final_reordered_updated_token_fixed_packed2048.jsonl'),  # Senna, ~27885 samples
         ],
     max_length=2048,
     # 通用 VQA 数据

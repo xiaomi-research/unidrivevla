@@ -7,6 +7,8 @@ import os
 project_dir = os.environ.get("PROJECT_DIR", "/path/to/unidrivevla/Bench2Drive")
 vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/Qwen3-VL-2B-Instruct")
 deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", os.path.join(os.path.dirname(project_dir), "zero_configs/adam_zero1_bf16.json"))
+driving_jsonl_root = os.environ.get("DRIVING_JSONL_ROOT", "/path/to/driving_jsonl")  # jsonl files packed at max_length=2048
+num_gpus = int(os.environ.get("NUM_GPUS", 64))
 # ==============================
 
 log_level = "INFO"
@@ -15,7 +17,6 @@ dist_params = dict(backend="nccl")
 plugin = True
 plugin_dir = "projects/mmdet3d_plugin/"
 
-num_gpus = 64
 batch_size = 4
 num_iters_per_epoch = int(234769 // (num_gpus * batch_size))
 num_epochs = 10  # Main repo Stage1: 30 epochs, B2D adjusted
@@ -532,11 +533,11 @@ ar_dataset_cfg = dict(
     enabled=True,
     # 驾驶数据
     jsonl_paths=[
-            '/mnt/scene-model/usr/yk3/ABCDEFG/HIJKLMN/Project/data/lyk_datasets_json/output_final_modified_finalview_processed_2048.jsonl', #26319
+            os.path.join(driving_jsonl_root, 'output_final_modified_finalview_processed_2048.jsonl'),
         ],
     max_length=2048,
     # 通用 VQA 数据
-    vqa_jsonl_paths=['/mnt/scene-model/usr/yk3/ABCDEFG/HIJKLMN/Project/data/lyk_datasets_json/finevision_subset_90k.jsonl'],
+    vqa_jsonl_paths=[os.path.join(driving_jsonl_root, 'finevision_subset_90k.jsonl')],
     vqa_max_length=2048,   # VQA 序列更短，单独控制
     # 共用
     samples_per_gpu=4,
