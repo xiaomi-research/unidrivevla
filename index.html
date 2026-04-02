@@ -25,9 +25,101 @@
 <body>
 
 <style>
+/* ===== Theme Colors (from Architecture: purple → green → yellow) ===== */
+:root {
+  --clr-understanding: #7C3AED;  /* purple - Understanding Expert */
+  --clr-perception:    #059669;  /* green  - Perception Expert */
+  --clr-planning:      #D97706;  /* amber  - Planning/Action Expert */
+  --clr-grad-start:    #7C3AED;
+  --clr-grad-mid:      #059669;
+  --clr-grad-end:      #D97706;
+}
+
+/* Hero gradient background */
+.hero-publication {
+  background: linear-gradient(135deg, #f3f0ff 0%, #ecfdf5 50%, #fffbeb 100%);
+}
+
+/* Title gradient text */
+.publication-title span {
+  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Section title accent */
+h2.title.is-5 {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 0.3em;
+}
+h2.title.is-5::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
+}
+
+/* Buttons */
+.button.is-primary {
+  background-color: var(--clr-understanding) !important;
+  border-color: transparent !important;
+}
+.button.is-primary:hover { filter: brightness(1.15); }
+
+.button.is-dark {
+  background-color: #1f2937 !important;
+}
+
+.button.is-warning {
+  background-color: var(--clr-planning) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+}
+.button.is-warning:hover { filter: brightness(1.15); }
+
+.button.is-info {
+  background-color: var(--clr-perception) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+}
+.button.is-info:hover { filter: brightness(1.15); }
+
+/* Section divider stripe */
+.section:nth-child(odd) {
+  background: #fafafa;
+}
+.section:nth-child(even) {
+  background: #ffffff;
+}
+
+/* Section top border accent - alternating colors */
+.section-understanding { border-top: 3px solid var(--clr-understanding); }
+.section-perception    { border-top: 3px solid var(--clr-perception); }
+.section-planning      { border-top: 3px solid var(--clr-planning); }
+.section-gradient      { border-top: 3px solid; border-image: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning)) 1; }
+
+/* Abstract title */
+h2.title.is-3 {
+  color: var(--clr-understanding);
+}
+
+/* BibTeX block */
+#BibTeX pre {
+  border-left: 4px solid var(--clr-perception);
+  background: #f0fdf4;
+  border-radius: 6px;
+}
+
+/* ===== Layout (unchanged) ===== */
 .section {
   padding-top: 1.8rem !important;
   padding-bottom: 1.8rem !important;
+}
 }
 .container.is-max-desktop {
   max-width: 900px !important;
@@ -161,7 +253,7 @@ p, .publication-caption {
 
 
 <!-- Abstract -->
-<section class="section">
+<section class="section section-gradient">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -193,7 +285,7 @@ p, .publication-caption {
 
 
 <!-- Fig 2: Representation interference analysis -->
-<section class="section">
+<section class="section section-understanding">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -217,7 +309,7 @@ p, .publication-caption {
 
 
 <!-- Fig 3: Architecture -->
-<section class="section">
+<section class="section section-perception">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -240,7 +332,7 @@ p, .publication-caption {
 
 
 <!-- Results: nuScenes -->
-<section class="section">
+<section class="section section-planning">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -262,7 +354,7 @@ p, .publication-caption {
 
 
 <!-- Results: Bench2Drive -->
-<section class="section">
+<section class="section section-perception">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -284,7 +376,7 @@ p, .publication-caption {
 
 
 <!-- BibTeX -->
-<section class="section" id="BibTeX">
+<section class="section section-gradient" id="BibTeX">
   <div class="container is-max-desktop content">
     <h2 class="title">BibTeX</h2>
     <pre><code>@article{li2026unidrivevla,
