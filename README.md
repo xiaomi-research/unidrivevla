@@ -11,7 +11,7 @@
 
 April 2, 2026
 
-<a href="https://github.com/xiaomi-research/UniDriveVLA/"><img src='https://img.shields.io/badge/arXiv-UniDriveVLA-red' alt='Paper PDF'></a> <a href="https://xiaomi-research.github.io/UniDriveVLA/"><img src='https://img.shields.io/badge/Project_Page-UniDriveVLA-green' alt='Project Page'></a> <a href="https://github.com/xiaomi-research/UniDriveVLA/"><img src='https://img.shields.io/badge/Code-UniDriveVLA-blue' alt='Code'></a>
+<a href="https://arxiv.org/abs/"><img src='https://img.shields.io/badge/arXiv-UniDriveVLA-red' alt='Paper PDF'></a> <a href="https://xiaomi-research.github.io/unidrivevla/"><img src='https://img.shields.io/badge/Project_Page-UniDriveVLA-green' alt='Project Page'></a> <a href="https://github.com/xiaomi-research/UniDriveVLA/"><img src='https://img.shields.io/badge/Code-UniDriveVLA-blue' alt='Code'></a> [![huggingface collection](https://img.shields.io/badge/%F0%9F%A4%97%20Weights-UniDriveVLA-yellow)](https://huggingface.co/collections/owl10/unidrivevla) [![huggingface datasets](https://img.shields.io/badge/%F0%9F%A4%97%20Datasets-UniDriveVLA-red)](https://huggingface.co/datasets/owl10/UniDriveVLA_Data)
 </div>
 
 ---

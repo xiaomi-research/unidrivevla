@@ -124,9 +124,9 @@ class NuScenes3DDataset(Dataset):
         if vad_ann_file is None:
             # Auto-detect based on ann_file name if not provided
             if 'train' in self.ann_file:
-                vad_ann_file = "/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_train.pkl"
+                vad_ann_file = "data/infos/vad_nuscenes_infos_temporal_train.pkl"
             elif 'val' in self.ann_file:
-                vad_ann_file = "/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_val.pkl"
+                vad_ann_file = "data/infos/vad_nuscenes_infos_temporal_val.pkl"
 
         if vad_ann_file and os.path.exists(vad_ann_file):
             print(f"Loading VAD annotations from {vad_ann_file}")

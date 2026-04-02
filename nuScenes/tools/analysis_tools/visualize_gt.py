@@ -689,10 +689,10 @@ def get_ann_info(index, token):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataroot', default='/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/nuscenes')
+    p.add_argument('--dataroot', default='data/nuscenes')
     p.add_argument('--version', default='v1.0-trainval')
-    p.add_argument('--ann_file', default='/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_val.pkl')
-    p.add_argument('--occ_root', default='/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/nuscenes/gts')
+    p.add_argument('--ann_file', default='data/infos/vad_nuscenes_infos_temporal_val.pkl')
+    p.add_argument('--occ_root', default='data/nuscenes/gts')
     p.add_argument('--out_dir', default='outputs/gt_vis')
     p.add_argument('--num_samples', type=int, default=50)
     p.add_argument('--token', default=None)

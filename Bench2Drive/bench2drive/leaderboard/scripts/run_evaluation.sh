@@ -1,7 +1,9 @@
 #!/bin/bash
-# Must set CARLA_ROOT
-export WORK_DIR=/high_perf_store3/world-model/yongkangli/ABCDEFG_NISHIDASHABI/A/B/UniDriveVLA/Bench2Drive
-export CARLA_ROOT=/high_perf_store3/world-model/yongkangli/ABCDEFG_NISHIDASHABI/A/B/UniDriveVLA/Bench2Drive/carla_new
+# Must set WORK_DIR and CARLA_ROOT before running, e.g.:
+#   export WORK_DIR=/path/to/unidrivevla/Bench2Drive
+#   export CARLA_ROOT=/path/to/carla_0.9.15
+export WORK_DIR=${WORK_DIR:-"/path/to/unidrivevla/Bench2Drive"}
+export CARLA_ROOT=${CARLA_ROOT:-"/path/to/carla_0.9.15"}
 export CARLA_SERVER=${CARLA_ROOT}/CarlaUE4.sh
 export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI
 export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla
