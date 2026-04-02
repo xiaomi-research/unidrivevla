@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving via Mixture-of-Transformers.">
+  <meta name="keywords" content="UniDriveVLA, Autonomous Driving, VLA, Vision-Language-Action, Mixture-of-Transformers">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="icon" href="./static/images/UniDriveVLA_Logo.png">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+
+<style>
+.section {
+  padding-top: 1.8rem !important;
+  padding-bottom: 1.8rem !important;
+}
+.container.is-max-desktop {
+  max-width: 900px !important;
+}
+h1.title, h2.title, h3.title {
+  margin-bottom: 1rem !important;
+}
+p, .publication-caption {
+  margin-top: 0.5rem !important;
+  margin-bottom: 0.8rem !important;
+  line-height: 1.55 !important;
+  text-align: justify !important;
+}
+.publication-image-main img,
+.publication-image-arch img,
+.publication-image-fig img,
+.publication-image-vis img {
+  width: 100% !important;
+  height: auto !important;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.column.is-four-fifths,
+.column.is-6,
+.column.is-centered {
+  flex: 0 0 100% !important;
+  max-width: 900px !important;
+  margin: 0 auto !important;
+}
+.abstract-section {
+  max-width: 900px !important;
+  margin: 0 auto !important;
+  font-size: 1em !important;
+  line-height: 1.55 !important;
+}
+.inst-logos {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 2em;
+  margin: 0.8em 0;
+}
+.inst-logos img {
+  height: 36px;
+  object-fit: contain;
+}
+</style>
+
+<!-- Hero / Title -->
+<section class="hero hero-publication">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+
+          <h2 class="title is-4 publication-title"
+              style="display: flex; justify-content: center; align-items: center; gap: 0.5em; text-align: center;">
+            <img src="./static/images/UniDriveVLA_Logo.png" alt="UniDriveVLA Logo" style="width: 2.8em; height: 2.8em; object-fit: contain;">
+            <span>UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving</span>
+          </h2>
+
+          <div class="is-size-5 publication-authors">
+            <span class="author-block"><a href="https://owl-10.github.io/yongkangli/"><strong>Yongkang Li</strong></a><sup>1,2</sup>,</span>
+            <span class="author-block"><strong>Lijun Zhou</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://sixu-yan.github.io/"><strong>Sixu Yan</strong></a><sup>1</sup>,</span>
+            <span class="author-block"><a href="https://github.com/LegendBC"><strong>Bencheng Liao</strong></a><sup>1</sup>,</span>
+            <span class="author-block"><strong>Tianyi Yan</strong><sup>2,3</sup>,</span>
+            <span class="author-block"><strong>Kaixin Xiong</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://long.ooo/"><strong>Long Chen</strong></a><sup>2</sup>,</span>
+            <span class="author-block"><strong>Hongwei Xie</strong><sup>2</sup>,</span>
+            <span class="author-block"><strong>Bing Wang</strong><sup>2</sup>,</span>
+            <span class="author-block"><strong>Guang Chen</strong><sup>2</sup>,</span>
+            <span class="author-block"><strong>Hangjun Ye</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://eic.hust.edu.cn/professor/liuwenyu/"><strong>Wenyu Liu</strong></a><sup>1</sup>,</span>
+            <span class="author-block"><strong>Haiyang Sun</strong><sup>†2</sup>,</span>
+            <span class="author-block"><a href="https://xwcv.github.io/"><strong>Xinggang Wang</strong></a><sup>✉1</sup></span>
+          </div>
+
+          <div class="is-size-6 publication-authors" style="margin-top:0.5em;">
+            <span class="author-block"><sup>1</sup>Huazhong University of Science and Technology &nbsp;</span>
+            <span class="author-block"><sup>2</sup>Xiaomi EV &nbsp;</span>
+            <span class="author-block"><sup>3</sup>SKL-IOTSC, University of Macau</span>
+            <br>
+            <span class="author-block"><sup>†</sup>Project Leader. &nbsp;</span>
+            <span class="author-block"><sup>✉</sup>Corresponding Author.</span>
+          </div>
+
+          <div class="inst-logos">
+            <img src="./static/images/hust_logo.png" alt="HUST">
+            <img src="./static/images/mi_logo.png" alt="Xiaomi EV">
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="https://arxiv.org/abs/"
+                   class="external-link button is-normal is-rounded is-primary">
+                  <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                  <span>arXiv</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://github.com/xiaomi-research/unidrivevla"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fab fa-github"></i></span>
+                  <span>Code</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://huggingface.co/collections/owl10/unidrivevla"
+                   class="external-link button is-normal is-rounded is-warning">
+                  <span class="icon"><i class="fas fa-brain"></i></span>
+                  <span>Model Weights</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://huggingface.co/datasets/owl10/UniDriveVLA_Data"
+                   class="external-link button is-normal is-rounded is-info">
+                  <span class="icon"><i class="fas fa-database"></i></span>
+                  <span>Data</span>
+                </a>
+              </span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Abstract -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            Vision-Language-Action (VLA) models have recently emerged in autonomous driving, with the promise of leveraging rich world knowledge to improve the cognitive capabilities of driving systems. However, adapting such models for driving tasks currently faces a critical dilemma between spatial perception and semantic reasoning. Consequently, existing VLA systems are forced into suboptimal compromises: directly adopting 2D Vision-Language Models yields limited spatial perception, whereas enhancing them with 3D spatial representations often impairs the native reasoning capacity of VLMs. We argue that this dilemma largely stems from the coupled optimization of spatial perception and semantic reasoning within shared model parameters. To overcome this, we propose <strong>UniDriveVLA</strong>, a unified driving Vision-Language-Action model based on <strong>Mixture-of-Transformers</strong> that addresses the perception–reasoning conflict via expert decoupling. Specifically, it comprises three experts for driving understanding, scene perception, and action planning, which are coordinated through masked joint attention. In addition, we combine a sparse perception paradigm with a three-stage progressive training strategy to improve spatial perception while maintaining semantic reasoning capability. Extensive experiments show that UniDriveVLA achieves state-of-the-art performance in open-loop evaluation on nuScenes and closed-loop evaluation on Bench2Drive. Moreover, it demonstrates strong performance across a broad range of perception, prediction, and understanding tasks, including 3D detection, online mapping, motion forecasting, and driving-oriented VQA.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fig 1: VLA paradigm comparison -->
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <div class="publication-image-main">
+          <img src="./static/images/fig1.png" alt="Comparison of VLA paradigms for autonomous driving">
+          <p class="publication-caption">
+            <strong>Comparison of VLA paradigms for autonomous driving.</strong>
+            (a) Vanilla 2D VLA provides strong semantic reasoning but limited spatial perception.
+            (b) 3D-enhanced VLA improves spatial perception but may degrade semantic reasoning.
+            (c) UniDriveVLA decouples understanding, perception, and action with the Mixture-of-Transformers architecture, achieving both.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Fig 2: Representation interference analysis -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-5">Representation Interference and Motivation</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <div class="publication-image-main">
+          <img src="./static/images/fig2.png" alt="Cosine similarity analysis and performance comparison">
+          <p class="publication-caption">
+            <strong>Analysis of representation interference and model performance.</strong>
+            (a) Cosine similarity between LLM tokens and perception tokens across layers. In the shared-weight decoder, the similarity progressively increases toward 1, indicating feature collapse into nearly identical representations, whereas MoT maintains low similarity and preserves task decoupling.
+            (b) Performance comparison. By mitigating optimization conflicts, UniDriveVLA consistently outperforms the shared-weight baseline across perception, reasoning, and planning metrics.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Fig 3: Architecture -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-5">Architecture Overview</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <div class="publication-image-main">
+          <img src="./static/images/fig3.png" alt="UniDriveVLA Architecture Overview">
+          <p class="publication-caption">
+            <strong>Architecture overview of UniDriveVLA.</strong>
+            UniDriveVLA adopts a Mixture-of-Transformers architecture with three specialized experts for driving understanding, scene perception, and action planning. By decoupling heterogeneous tokens into dedicated experts and coordinating them through masked joint attention, the model mitigates optimization conflicts and unifies understanding, perception, and planning within a single framework.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Results: nuScenes -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-5">Performance on nuScenes Open-Loop Evaluation</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <div class="publication-image-main">
+          <img src="./static/images/result1.png" alt="nuScenes open-loop results">
+          <p class="publication-caption">
+            UniDriveVLA achieves state-of-the-art open-loop planning performance on nuScenes (ST-P3 metrics). UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) both significantly outperform prior methods in L2 distance and collision rate.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Results: Bench2Drive -->
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-5">Performance on Bench2Drive Closed-Loop Evaluation</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <div class="publication-image-main">
+          <img src="./static/images/result2.png" alt="Bench2Drive closed-loop results">
+          <p class="publication-caption">
+            Closed-loop evaluation on CARLA Bench2Drive. UniDriveVLA achieves a Driving Score of 78.37 and a scenario success rate of 51.82%, outperforming prior end-to-end methods across both closed-loop metrics and multi-ability tests (merging, overtaking, emergency braking, give-way, traffic sign compliance).
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- BibTeX -->
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@article{li2026unidrivevla,
+  title={UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving},
+  author={Li, Yongkang and Zhou, Lijun and Yan, Sixu and Liao, Bencheng and Yan, Tianyi and Xiong, Kaixin and Chen, Long and Xie, Hongwei and Wang, Bing and Chen, Guang and Ye, Hangjun and Sun, Haiyang and Liu, Wenyu and Wang, Xinggang},
+  year={2026}
+}</code></pre>
+  </div>
+</section>
+
+</body>
+</html>
