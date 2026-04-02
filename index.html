@@ -35,24 +35,37 @@
   --clr-grad-end:      #D97706;
 }
 
-/* Hero text on dark gradient */
-.hero-publication,
-.hero-publication .title,
-.hero-publication .subtitle,
-.hero-publication .publication-authors,
-.hero-publication .publication-authors a,
-.hero-publication sup {
-  color: #ffffff !important;
-}
-.hero-publication .publication-title span {
-  background: none;
-  -webkit-text-fill-color: #ffffff;
-  color: #ffffff !important;
+/* Hero background: light with subtle gradient tint */
+.hero-publication {
+  background: linear-gradient(135deg, #ede9fe 0%, #d1fae5 45%, #d1fae5 55%, #fef3c7 100%);
 }
 
-/* Hero gradient background */
-.hero-publication {
-  background: linear-gradient(135deg, #7C3AED 0%, #059669 50%, #D97706 100%);
+/* Hero title: gradient text matching architecture colors */
+.hero-publication .publication-title span {
+  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Author names */
+.hero-publication .publication-authors {
+  color: #374151 !important;
+}
+.hero-publication .publication-authors a {
+  color: var(--clr-understanding) !important;
+  font-weight: 600;
+}
+.hero-publication .publication-authors a:hover {
+  color: var(--clr-perception) !important;
+}
+
+/* Affiliation / sup */
+.hero-publication .is-size-6.publication-authors {
+  color: #6b7280 !important;
+}
+.hero-publication sup {
+  color: var(--clr-planning) !important;
 }
 
 /* Title gradient text */
@@ -267,6 +280,26 @@ p, .publication-caption {
 </section>
 
 
+<!-- Demo Video -->
+<section class="section section-gradient">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Demo Video</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <video controls style="width:100%; aspect-ratio:16/9; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.12);">
+          <source src="./static/videos/demo.mp4" type="video/mp4">
+          Your browser does not support the video tag.
+        </video>
+      </div>
+    </div>
+  </div>
+</section>
+
+
 <!-- Abstract -->
 <section class="section section-gradient">
   <div class="container is-max-desktop">
@@ -309,6 +342,9 @@ p, .publication-caption {
     </div>
     <div class="columns is-centered">
       <div class="column is-four-fifths">
+        <p>
+          Existing 3D-enhanced VLA models inject spatial representations into a shared-weight decoder alongside semantic tokens. While this improves spatial awareness, it introduces <strong>representation interference</strong>: as depth increases, perception and semantic features progressively collapse toward identical representations, undermining the native reasoning capacity of the pre-trained VLM. We measure this interference by tracking cosine similarity between LLM tokens and perception tokens across layers, and show that a shared decoder causes similarity to approach 1, whereas our MoT design maintains low similarity throughout—confirming effective task decoupling.
+        </p>
         <div class="publication-image-main">
           <img src="./static/images/fig2.png" alt="Cosine similarity analysis and performance comparison">
           <p class="publication-caption">
@@ -333,6 +369,15 @@ p, .publication-caption {
     </div>
     <div class="columns is-centered">
       <div class="column is-four-fifths">
+        <p>
+          UniDriveVLA is built on a <strong>Mixture-of-Transformers (MoT)</strong> backbone with three specialized experts: a <em>Understanding Expert</em> for semantic reasoning, a <em>Perception Expert</em> for spatial scene understanding, and an <em>Action Expert</em> for trajectory generation. Each expert maintains its own query/key/value projections, feed-forward networks, and normalization layers, preventing parameter sharing from forcing heterogeneous representations into the same subspace.
+        </p>
+        <p>
+          Across experts, information is coordinated through <strong>Masked Joint Attention</strong>: all token groups are concatenated and attend jointly, but a structured mask enforces the correct information flow—understanding tokens follow causal masking and are unaffected by perception or action tokens; perception tokens can attend to preceding understanding tokens to acquire semantic context; action tokens aggregate both semantic and spatial signals for planning. After attention, each group is routed back to its own expert pathway for further processing.
+        </p>
+        <p>
+          The model is trained with a unified objective combining autoregressive language modeling (<em>L</em><sub>ar</sub>), structured perception supervision (<em>L</em><sub>per</sub>), and flow-matching-based trajectory generation (<em>L</em><sub>act</sub>), enabling end-to-end joint optimization across all three capabilities.
+        </p>
         <div class="publication-image-main">
           <img src="./static/images/fig3.png" alt="UniDriveVLA Architecture Overview">
           <p class="publication-caption">
@@ -356,6 +401,9 @@ p, .publication-caption {
     </div>
     <div class="columns is-centered">
       <div class="column is-four-fifths">
+        <p>
+          We evaluate open-loop planning on the nuScenes benchmark using ST-P3 metrics. Both UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) achieve state-of-the-art L2 distance and collision rate, significantly outperforming prior end-to-end and VLA-based methods. The gains are consistent across all planning horizons (1s, 2s, 3s), demonstrating that expert decoupling improves planning without sacrificing trajectory quality.
+        </p>
         <div class="publication-image-main">
           <img src="./static/images/result1.png" alt="nuScenes open-loop results">
           <p class="publication-caption">
@@ -378,6 +426,9 @@ p, .publication-caption {
     </div>
     <div class="columns is-centered">
       <div class="column is-four-fifths">
+        <p>
+          For closed-loop evaluation, we test on the CARLA-based Bench2Drive benchmark, which assesses real driving competence through scenario success rate and a composite Driving Score. UniDriveVLA achieves a Driving Score of <strong>78.37</strong> and a scenario success rate of <strong>51.82%</strong>, outperforming prior end-to-end methods across both overall metrics and fine-grained ability tests covering merging, overtaking, emergency braking, give-way, and traffic sign compliance.
+        </p>
         <div class="publication-image-main">
           <img src="./static/images/result2.png" alt="Bench2Drive closed-loop results">
           <p class="publication-caption">
