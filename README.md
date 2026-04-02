@@ -159,10 +159,10 @@ If you have any questions, please contact [Yongkang Li](https://owl-10.github.io
 
 UniDriveVLA is built upon the following outstanding open-source works:
 
+- [Openpi](https://github.com/Physical-Intelligence/openpi) — VLA training framework
 - [InternVLA-A1](https://github.com/InternRobotics/InternVLA-A1) — VLA model for robotic manipulation
 - [HiP-AD](https://github.com/nullmax-vision/HiP-AD) — Hierarchical planning for autonomous driving
 - [SparseDrive](https://github.com/swc-17/SparseDrive) — Sparse 3D perception framework for autonomous driving
-- [Openpi](https://github.com/Physical-Intelligence/openpi) — VLA training framework
 - [Bench2Drive](https://github.com/Thinklab-SJTU/Bench2Drive) — Closed-loop evaluation in CARLA
   
 
