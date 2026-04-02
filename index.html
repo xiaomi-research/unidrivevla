@@ -211,18 +211,18 @@ p, .publication-caption {
 
           <div class="is-size-5 publication-authors">
             <span class="author-block"><a href="https://owl-10.github.io/yongkangli/"><strong>Yongkang Li</strong></a><sup>1,2</sup>,</span>
-            <span class="author-block"><strong>Lijun Zhou</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=RYIXvAoAAAAJ"><strong>Lijun Zhou</strong></a><sup>2</sup>,</span>
             <span class="author-block"><a href="https://sixu-yan.github.io/"><strong>Sixu Yan</strong></a><sup>1</sup>,</span>
             <span class="author-block"><a href="https://github.com/LegendBC"><strong>Bencheng Liao</strong></a><sup>1</sup>,</span>
-            <span class="author-block"><strong>Tianyi Yan</strong><sup>2,3</sup>,</span>
-            <span class="author-block"><strong>Kaixin Xiong</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?user=0JmbnNQAAAAJ&hl=en&oi=ao"><strong>Tianyi Yan</strong></a><sup>2,3</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?user=Kh01ChoAAAAJ&hl=en&oi=ao"><strong>Kaixin Xiong</strong></a><sup>2</sup>,</span>
             <span class="author-block"><a href="https://long.ooo/"><strong>Long Chen</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><strong>Hongwei Xie</strong><sup>2</sup>,</span>
-            <span class="author-block"><strong>Bing Wang</strong><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?user=kRvS9KAAAAAJ&hl=en&oi=ao"><strong>Hongwei Xie</strong></a><sup>2</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?user=uwTzb6IAAAAJ&hl=en&oi=sra"><strong>Bing Wang</strong></a><sup>2</sup>,</span>
             <span class="author-block"><strong>Guang Chen</strong><sup>2</sup>,</span>
             <span class="author-block"><strong>Hangjun Ye</strong><sup>2</sup>,</span>
             <span class="author-block"><a href="https://eic.hust.edu.cn/professor/liuwenyu/"><strong>Wenyu Liu</strong></a><sup>1</sup>,</span>
-            <span class="author-block"><strong>Haiyang Sun</strong><sup>†2</sup>,</span>
+            <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=SYbFNsIAAAAJ"><strong>Haiyang Sun</strong></a><sup>†2</sup>,</span>
             <span class="author-block"><a href="https://xwcv.github.io/"><strong>Xinggang Wang</strong></a><sup>✉1</sup></span>
           </div>
 
@@ -391,33 +391,8 @@ p, .publication-caption {
 </section>
 
 
-<!-- Results: nuScenes -->
-<section class="section section-planning">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-5">Performance on nuScenes Open-Loop Evaluation</h2>
-      </div>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
-        <p>
-          We evaluate open-loop planning on the nuScenes benchmark using ST-P3 metrics. Both UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) achieve state-of-the-art L2 distance and collision rate, significantly outperforming prior end-to-end and VLA-based methods. The gains are consistent across all planning horizons (1s, 2s, 3s), demonstrating that expert decoupling improves planning without sacrificing trajectory quality.
-        </p>
-        <div class="publication-image-main">
-          <img src="./static/images/result1.png" alt="nuScenes open-loop results">
-          <p class="publication-caption">
-            UniDriveVLA achieves state-of-the-art open-loop planning performance on nuScenes (ST-P3 metrics). UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) both significantly outperform prior methods in L2 distance and collision rate.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
 <!-- Results: Bench2Drive -->
-<section class="section section-perception">
+<section class="section section-planning">
   <div class="container is-max-desktop">
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
@@ -430,9 +405,34 @@ p, .publication-caption {
           For closed-loop evaluation, we test on the CARLA-based Bench2Drive benchmark, which assesses real driving competence through scenario success rate and a composite Driving Score. UniDriveVLA achieves a Driving Score of <strong>78.37</strong> and a scenario success rate of <strong>51.82%</strong>, outperforming prior end-to-end methods across both overall metrics and fine-grained ability tests covering merging, overtaking, emergency braking, give-way, and traffic sign compliance.
         </p>
         <div class="publication-image-main">
-          <img src="./static/images/result2.png" alt="Bench2Drive closed-loop results">
+          <img src="./static/images/result1.png" alt="Bench2Drive closed-loop results">
           <p class="publication-caption">
             Closed-loop evaluation on CARLA Bench2Drive. UniDriveVLA achieves a Driving Score of 78.37 and a scenario success rate of 51.82%, outperforming prior end-to-end methods across both closed-loop metrics and multi-ability tests (merging, overtaking, emergency braking, give-way, traffic sign compliance).
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- Results: nuScenes -->
+<section class="section section-perception">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-5">Performance on nuScenes Open-Loop Evaluation</h2>
+      </div>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-four-fifths">
+        <p>
+          We evaluate open-loop planning on the nuScenes benchmark using ST-P3 metrics. Both UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) achieve state-of-the-art L2 distance and collision rate, significantly outperforming prior end-to-end and VLA-based methods. The gains are consistent across all planning horizons (1s, 2s, 3s), demonstrating that expert decoupling improves planning without sacrificing trajectory quality.
+        </p>
+        <div class="publication-image-main">
+          <img src="./static/images/result2.png" alt="nuScenes open-loop results">
+          <p class="publication-caption">
+            UniDriveVLA achieves state-of-the-art open-loop planning performance on nuScenes (ST-P3 metrics). UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) both significantly outperform prior methods in L2 distance and collision rate.
           </p>
         </div>
       </div>
