@@ -1,3 +1,16 @@
+# Copyright 2026 The Xiaomi Corporation. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 from __future__ import annotations
 
 import math
@@ -1633,7 +1646,7 @@ class QwenVL3APlanningHead(nn.Module):
         )
 
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-        prefix_att_2d_4d = self._prepare_attention_masks_4d(prefix_att_2d)
+        prefix_att_2d_4d = self._prepare_attention_masks_4d(prefix_att_2d).to(dtype)
 
         prefix_pos_ids, _ = self.get_position_ids(prefix_input_ids, all_image_grids, prefix_pad_masks)
         max_prefix_pos = prefix_pos_ids.max(dim=0).values.max(dim=-1, keepdim=True).values
@@ -1663,7 +1676,7 @@ class QwenVL3APlanningHead(nn.Module):
         perception_att_2d = make_att_2d_masks(perception_pad_masks, perception_att_masks)
         perception_full_att_2d = torch.cat([prefix_pad_2d, perception_att_2d], dim=2)
 
-        perception_full_att_2d_4d = self._prepare_attention_masks_4d(perception_full_att_2d)
+        perception_full_att_2d_4d = self._prepare_attention_masks_4d(perception_full_att_2d).to(dtype)
 
         perception_range = torch.arange(1, perception_len + 1, device=device).view(1, -1).expand(bsz, -1)
         perception_pos_ids_1d = max_prefix_pos + perception_range
@@ -1796,7 +1809,7 @@ class QwenVL3APlanningHead(nn.Module):
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
         full_att_2d_masks = torch.cat([cached_pad_2d_masks, suffix_att_2d_masks], dim=2)
-        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks).to(x_t.dtype)
 
         suffix_range = torch.arange(1, suffix_len + 1, device=max_cached_position_ids.device).view(1, -1).expand(batch_size, -1)
         suffix_pos_ids_1d = max_cached_position_ids + suffix_range

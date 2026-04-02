@@ -1,5 +1,14 @@
 _base_ = ["../_base_/default_runtime.py"]
 
+import os
+# ===== User Configuration =====
+vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/Qwen3-VL-2B-Instruct")
+occworld_vae_path = os.environ.get("OCCWORLD_VAE_PATH", "/path/to/ckpt/occvae_latest.pth")
+deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "/path/to/zero_configs/adam_zero1_bf16.json")
+stage1_checkpoint = os.environ.get("STAGE1_CHECKPOINT", "/path/to/stage1/checkpoint/mp_rank_00_model_states.pt")
+data_infos_root = os.environ.get("DATA_INFOS_ROOT", "data/infos")
+# ==============================
+
 # ====================================================================
 #  Stage 2: Full Task Joint Training (det + map + ego + motion)
 #  - Load from Stage1 checkpoint
@@ -8,7 +17,7 @@ _base_ = ["../_base_/default_runtime.py"]
 # ====================================================================
 
 # Load Stage1 checkpoint
-load_from = "/high_perf_store3/world-model/yongkangli/CKPT/UniDriveVLA_Final_Nusc/unidrivevla_2b_stage1_final.pt"
+load_from = stage1_checkpoint
 
 # Update-2023-06-12:
 # [Enhance] Update some freezing args of UniAD
@@ -342,7 +351,7 @@ unified_decoder_cfg = dict(
         add_neg_dn=True,
         cls_weight=2.0,
         box_weight=0.25,
-        reg_weights=[2.0] * 3 + [0.5] * 3 + [0.0] * 4,
+        reg_weights=[2.0] * 3 + [0.5] * 3 + [0.5] * 2 + [0.0] * 2,
         cls_wise_reg_weights={
             9: [2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
         },
@@ -366,7 +375,6 @@ unified_decoder_cfg = dict(
     det_decoder=dict(type="SparseBox3DDecoder"),
     map_decoder=dict(type="SparsePoint3DDecoder"),
     motion_decoder=dict(type="SparseMotionDecoder"),
-
     loss_det_cls=dict(
         type="FocalLoss",
         use_sigmoid=True,
@@ -436,7 +444,7 @@ model = dict(
     type='UniDriveVLA',
     planning_head=dict(
         type='QwenVL3APlanningHead',
-        pretrained_path='/high_perf_store3/world-model/yongkangli/ms-swift-main/megatron_output/Qwen3-VL-2B-Instruct-3-7-with-his/v0-20260209-025409/checkpoint-3072/',
+        pretrained_path=vlm_pretrained_path,
         action_dim=2,
         action_horizon=6,
         dtype='bfloat16',
@@ -478,9 +486,7 @@ model = dict(
             expansion=8,
             vqvae_cfg=None,
         ),
-        occworld_vae_path='/high_perf_store3/world-model/yongkangli/UniDriveVLA/ckpt/occvae_latest.pth',
-
-        # Feature settings
+        occworld_vae_path=occworld_vae_path,
         feat_grad=True,
         feature_source="raw",
         unified_decoder_cfg=unified_decoder_cfg,
@@ -490,6 +496,7 @@ model = dict(
         driving_deepstack=True,
         vlm_fusion_cfg=dict(type='direct'),
         feature_fusion_cfg=dict(type='none'),
+        inference_attn_impl="sdpa",
     ),
     task_loss_weight=dict(planning=1.0),
 )
@@ -505,9 +512,9 @@ ann_file_train = info_root + "nuscenes_infos_train.pkl"
 ann_file_val = info_root + "nuscenes_infos_val.pkl"
 ann_file_test = info_root + "nuscenes_infos_val.pkl"
 
-vad_ann_file_train = "/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_train.pkl"
-vad_ann_file_val = "/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_val.pkl"
-vad_ann_file_test = "/high_perf_store3/world-model/yongkangli/UniDriveVLA/data/infos/vad_nuscenes_infos_temporal_val.pkl"
+vad_ann_file_train = os.path.join(data_infos_root, "vad_nuscenes_infos_temporal_train.pkl")
+vad_ann_file_val = os.path.join(data_infos_root, "vad_nuscenes_infos_temporal_val.pkl")
+vad_ann_file_test = os.path.join(data_infos_root, "vad_nuscenes_infos_temporal_val.pkl")
 
 train_pipeline = [
     dict(type="LoadMultiViewImageFromFiles", to_float32=True),
@@ -693,7 +700,7 @@ data = dict(
 )
 
 deepspeed = True
-deepspeed_config = '/high_perf_store3/world-model/yongkangli/UniDriveVLA/zero_configs/adam_zero1_bf16.json'
+deepspeed_config = deepspeed_config
 
 gradient_checkpointing = dict(
     enabled=True,
@@ -730,8 +737,8 @@ runner = dict(
 
 eval_mode = dict(
     with_det=True,
-    with_tracking=False,
-    with_map=False,
+    with_tracking=True,
+    with_map=True,
     with_motion=True,
     with_planning=True,
     tracking_threshold=0.2,

@@ -1,28 +1,55 @@
 # Installation
 
-## 1. Clone the Repository
+
+## Common Setup
+
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/xiaomi-research/unidrivevla.git
 cd unidrivevla
 ```
 
-## 2. Create a Conda Environment
+### 2. Create a Conda Environment
 
+> **Python version note:**
+> - nuScenes training/evaluation and Bench2Drive training support **Python 3.9+**
+> - Bench2Drive closed-loop evaluation (CARLA 0.9.15) requires **Python 3.8**
+>
+> We recommend using two separate environments: Python 3.9 for training and Python 3.8 for Bench2Drive evaluation. Alternatively, you can use Python 3.8 throughout if you only need one environment.
+
+**Training environment (recommended):**
 ```bash
 conda create -n unidrivevla python=3.9
 conda activate unidrivevla
 ```
 
-## 3. Install PyTorch
+**Evaluation environment (for Bench2Drive closed-loop only):**
+```bash
+conda create -n unidrivevla_eval python=3.8
+conda activate unidrivevla_eval
+```
 
-PyTorch >= 2.5.1 is required.
+### 3. Install PyTorch
 
 ```bash
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
-## 4. Install MMCV (from third-party)
+### 4. Install Transformers
+
+```bash
+pip install transformers==4.57.1
+```
+
+Then replace the model files with our modified version for Qwen3-VL support:
+
+```bash
+TRANSFORMERS_DIR=${CONDA_PREFIX}/lib/python3.9/site-packages/transformers/
+cp -r qwenvl3/transformers_replace/models ${TRANSFORMERS_DIR}
+```
+
+### 6. Install MMCV (from third-party)
 
 We provide a modified version of MMCV adapted for DeepSpeed. Build it from source:
 
@@ -37,7 +64,7 @@ pip install -e .
 cd ../..
 ```
 
-## 5. Install MMDetection3D (from third-party)
+### 7. Install MMDetection3D (from third-party)
 
 ```bash
 cd third_party/mmdetection3d-1.0.0rc6
@@ -45,41 +72,79 @@ pip install -e .
 cd ../..
 ```
 
-## 6. Install Project Dependencies
-
-For nuScenes:
+### 8. Install Training Dependencies
 
 ```bash
-pip install -r requirements_nusc.txt
-```
-
-For Bench2Drive:
-
-```bash
-pip install -r requirements_b2d.txt
-```
-
-## 7. Install Training Dependencies
-
-```bash
-# DeepSpeed (for distributed training)
-pip install deepspeed>=0.14.0
-
-# PEFT (for LoRA)
-pip install peft>=0.7.0
-```
-
-## 8. Install UniDriveVLA
-
-```bash
-pip install -e .
+pip install deepspeed==0.14.4
+pip install peft
 ```
 
 ---
 
-## CARLA Setup (for Bench2Drive closed-loop evaluation only)
+## nuScenes
 
-### 1. Install CARLA 0.9.15
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements/requirements_nusc.txt
+```
+
+### 2. Build Custom Ops
+
+```bash
+cd nuScenes/projects/mmdet3d_plugin/ops
+pip install -e .
+cd ../../../..
+```
+
+---
+
+## Bench2Drive
+
+> **Note:** Training uses Python 3.9+. Closed-loop evaluation with CARLA 0.9.15 requires a **separate Python 3.8 environment**.
+
+### 1. Install Training Dependencies (Python 3.9+)
+
+```bash
+pip install -r requirements/requirements_b2d.txt
+```
+
+### 2. Create Evaluation Environment (Python 3.8)
+
+CARLA 0.9.15 requires Python 3.8. Create a separate conda environment for evaluation:
+
+```bash
+conda create -n unidrivevla_eval python=3.8
+conda activate unidrivevla_eval
+pip install -r requirements/requirements_b2d.txt
+```
+
+Install MMCV and MMDetection3D from third-party:
+
+```bash
+cd third_party/mmcv-1.7.2
+export MMCV_WITH_OPS=1
+export FORCE_CUDA=1
+export MMCV_NO_Compiler_CHECK=1
+pip install -r requirements.txt
+python setup.py build_ext --inplace
+pip install -e .
+cd ../..
+
+cd third_party/mmdetection3d-1.0.0rc6
+pip install -e .
+cd ../..
+```
+
+Install our modified transformers (adapted for Python 3.8) from third-party:
+
+```bash
+cd third_party/transformers-4.57.1
+pip install -e .
+cd ../..
+```
+
+### 3. Install CARLA 0.9.15
 
 ```bash
 mkdir -p carla && cd carla
@@ -98,43 +163,3 @@ export CARLA_ROOT=/path/to/unidrivevla/carla
 echo "$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg" >> $CONDA_PREFIX/lib/python3.9/site-packages/carla.pth
 ```
 
-### 2. Create Multi-Route Splits
-
-```bash
-python ./bench2drive/tools/split_xml.py
-```
-
-### 3. Configure Paths
-
-Set `project_dir` in your config file:
-
-```python
-# projects/configs/unidrivevla/unidrivevla_b2d_stage2.py
-project_dir = "/path/to/unidrivevla"
-```
-
-Set `WORK_DIR` and `CARLA_ROOT` in the evaluation script:
-
-```bash
-# bench2drive/leaderboard/scripts/run_evaluation.sh
-export WORK_DIR=/path/to/unidrivevla
-export CARLA_ROOT=/path/to/unidrivevla/carla
-```
-
-### 4. Run Closed-Loop Evaluation
-
-```bash
-bash ./bench2drive/leaderboard/scripts/run_evaluation_multi.sh
-```
-
-### 5. Evaluate Results
-
-```bash
-python ./bench2drive/tools/statistic_route_json.py
-```
-
-### 6. Generate Videos (Optional)
-
-```bash
-python ./bench2drive/tools/generate_video.py
-```
