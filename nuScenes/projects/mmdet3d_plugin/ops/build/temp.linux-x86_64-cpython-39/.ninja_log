@@ -1,0 +1,4 @@
+# ninja log v5
+0	16540	1771424827099075830	/high_perf_store3/world-model/yongkangli/UniDriveVLA/projects/mmdet3d_plugin/ops/build/temp.linux-x86_64-cpython-39/src/deformable_aggregation_cuda.o	cd219bdc39839e87
+0	19632	1771424830198653612	/high_perf_store3/world-model/yongkangli/UniDriveVLA/projects/mmdet3d_plugin/ops/build/temp.linux-x86_64-cpython-39/src/deformable_aggregation.o	99f41151aa367bca
+51	16905	1771472247466406544	/high_perf_store3/world-model/yongkangli/UniDriveVLA/projects/mmdet3d_plugin/ops/build/temp.linux-x86_64-cpython-39/src/deformable_aggregation_cuda.o	9edc798634014a5e
