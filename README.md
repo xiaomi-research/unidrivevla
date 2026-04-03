@@ -176,6 +176,7 @@ If you find UniDriveVLA useful in your research or applications, please consider
 @article{li2026unidrivevla,
   title={UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving},
   author={Li, Yongkang and Zhou, Lijun and Yan, Sixu and Liao, Bencheng and Yan, Tianyi and Xiong, Kaixin and Chen, Long and Xie, Hongwei and Wang, Bing and Chen, Guang and Ye, Hangjun and Sun, Haiyang and Liu, Wenyu and Wang, Xinggang},
+  journal={arXiv preprint arXiv:2604.02190},
   year={2026}
 }
 ```
