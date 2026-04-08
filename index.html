@@ -282,12 +282,13 @@ p, .publication-caption {
 
 <!-- Demo Videos -->
 <style>
-.demo-videos-container { max-width: 1200px; margin: 0 auto; }
-.demo-videos-row { display: flex; gap: 10px; margin-bottom: 10px; }
-.demo-videos-row video { flex: 1; width: 0; height: auto; border-radius: 6px; }
+#demo-videos-wrap { width: 100% !important; max-width: 1600px !important; margin: 0 auto !important; padding: 0 16px !important; }
+.demo-row { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 32px !important; margin-bottom: 8px !important; }
+.demo-row video { width: 100% !important; height: auto !important; display: block !important; border-radius: 4px !important; }
+.demo-label { text-align: center !important; font-size: 1.2rem !important; font-weight: 700 !important; margin: 0 0 6px 0 !important; }
 </style>
-<section class="section section-gradient">
-  <div class="demo-videos-container">
+<section class="section section-gradient" style="padding: 1.8rem 0 !important;">
+  <div id="demo-videos-wrap">
 
     <!-- Section Title -->
     <div class="has-text-centered" style="margin-bottom:1.5rem;">
@@ -295,40 +296,34 @@ p, .publication-caption {
     </div>
 
     <!-- Complex Scene -->
-    <div style="display:flex; justify-content:center; margin-bottom:0.6rem;">
-      <p style="font-size:1.5rem; font-weight:700; color:#7C3AED; margin:0;">Complex Scene</p>
-    </div>
-    <div class="demo-videos-row">
+    <p class="demo-label" style="color:#7C3AED;">Complex Scene</p>
+    <div class="demo-row">
       <video autoplay loop muted playsinline><source src="./static/Video/complex/325cef682f064c55a255f2625c533b75.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/complex/696a45dbd11346b794fdce43fa0a1770.mp4" type="video/mp4"></video>
     </div>
-    <div class="demo-videos-row" style="margin-bottom:2rem;">
+    <div class="demo-row" style="margin-bottom:1.5rem;">
       <video autoplay loop muted playsinline><source src="./static/Video/complex/3dd9ad3f963e4f588d75c112cbf07f56.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/complex/e7ef871f77f44331aefdebc24ec034b7.mp4" type="video/mp4"></video>
     </div>
 
     <!-- Night -->
-    <div style="display:flex; justify-content:center; margin-bottom:0.6rem;">
-      <p style="font-size:1.5rem; font-weight:700; color:#059669; margin:0;">Night</p>
-    </div>
-    <div class="demo-videos-row">
+    <p class="demo-label" style="color:#059669;">Night</p>
+    <div class="demo-row">
       <video autoplay loop muted playsinline><source src="./static/Video/Dark/16be583c31a2403caa6c158bb55ae616.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/Dark/e8834785d9ff4783a5950281a4579943.mp4" type="video/mp4"></video>
     </div>
-    <div class="demo-videos-row" style="margin-bottom:2rem;">
+    <div class="demo-row" style="margin-bottom:1.5rem;">
       <video autoplay loop muted playsinline><source src="./static/Video/Dark/7052d21b95fc4bae8761b8d9524f3e42.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/Dark/f97bf749746c4c3a8ad9f1c11eab6444.mp4" type="video/mp4"></video>
     </div>
 
     <!-- Rainy -->
-    <div style="display:flex; justify-content:center; margin-bottom:0.6rem;">
-      <p style="font-size:1.5rem; font-weight:700; color:#D97706; margin:0;">Rainy</p>
-    </div>
-    <div class="demo-videos-row">
+    <p class="demo-label" style="color:#D97706;">Rainy</p>
+    <div class="demo-row">
       <video autoplay loop muted playsinline><source src="./static/Video/Rainy/7210f928860043b5a7e0d3dd4b3e80ff.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/Rainy/f5b29a1e09d04355adcd60ab72de006b.mp4" type="video/mp4"></video>
     </div>
-    <div class="demo-videos-row">
+    <div class="demo-row">
       <video autoplay loop muted playsinline><source src="./static/Video/Rainy/b789de07180846cc972118ee6d1fb027.mp4" type="video/mp4"></video>
       <video autoplay loop muted playsinline><source src="./static/Video/Rainy/d01e7279da2649ef896dc42f6b9ee7ab.mp4" type="video/mp4"></video>
     </div>
