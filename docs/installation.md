@@ -32,9 +32,22 @@ conda activate unidrivevla_eval
 
 ### 3. Install PyTorch
 
+First, detect your CUDA version:
+
 ```bash
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu118
+CUDA_VERSION=$(nvcc -V | grep -oP 'release \K[\d.]+' | cut -d. -f1-2 | tr -d '.')
+CUDA_SUFFIX="cu${CUDA_VERSION:0:2}${CUDA_VERSION:2:2}"
+echo "Detected CUDA: ${CUDA_SUFFIX}"
 ```
+
+Then install PyTorch with the matching CUDA suffix:
+
+```bash
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/${CUDA_SUFFIX}
+```
+
+For example, CUDA 12.1 → `cu121`, CUDA 11.8 → `cu118`.
+
 
 ### 4. Install Transformers
 
@@ -45,6 +58,7 @@ pip install transformers==4.57.1
 Then replace the model files with our modified version for Qwen3-VL support:
 
 ```bash
+CONDA_PREFIX=/path/to/anaconda3/ or /path/to/anaconda3/envs/env_name/
 TRANSFORMERS_DIR=${CONDA_PREFIX}/lib/python3.9/site-packages/transformers/
 cp -r qwenvl3/transformers_replace/models ${TRANSFORMERS_DIR}
 ```
@@ -75,16 +89,20 @@ cd ../..
 ### 8. Install Training Dependencies
 
 ```bash
-pip install mmdet==2.26.0 mmsegmentation==0.29.1
 pip install deepspeed==0.14.4
-pip install pyquaternion
-pip install nuscenes-devkit
-pip install prettytable
-pip install shapely 
 pip install peft
 pip install timm
 pip install qwen_vl_utils
 ```
+
+
+### 9. Install Flash Attn
+
+```bash
+pip install flash-attn --no-build-isolation
+```
+
+If the installation fails, it is recommended to download the prebuilt .whl package from the official FlashAttention repository and install it manually.
 
 ---
 

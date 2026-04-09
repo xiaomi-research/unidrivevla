@@ -8,21 +8,22 @@ Download the [nuScenes dataset](https://www.nuscenes.org/nuscenes#download) and 
 
 ```bash
 cd unidrivevla
-mkdir -p data
-ln -s /path/to/nuscenes ./data/nuscenes
+mkdir -p nuScenes/data/nuscenes
+ln -s /path/to/nuscenes/* /path/to/unidrivevla/nuScenes/data/nuscenes
 ```
 
 ### 2. Download Occ3D Annotations
 
-Download the [Occ3D-nuScenes](https://drive.google.com/drive/folders/1Xarc91cNCNN3h8Vum-REbI-f0UlSf5Fc) occupancy ground truth and place it under `data/nuscenes/gts/`.
+Download the [Occ3D-nuScenes](https://drive.google.com/drive/folders/1Xarc91cNCNN3h8Vum-REbI-f0UlSf5Fc) occupancy ground truth and place it under `nuScenes/data/nuscenes/gts/`.
 
 ### 3. Download Evaluation PKLs
 
-Download additional evaluation-related pkl files from [Google Drive](https://drive.google.com/drive/folders/1Dt7od4aH-tSOjrDGZX9b43I8Fa7TZI3F) and place them under `data/infos/`.
+Download additional evaluation-related pkl files from [Google Drive](https://drive.google.com/drive/folders/1Dt7od4aH-tSOjrDGZX9b43I8Fa7TZI3F) and place them under `nuScenes/data/infos/`.
 
 ### 4. Generate Info PKL Files
 
 ```bash
+cd nuScenes
 sh scripts/create_data.sh
 ```
 
@@ -49,19 +50,17 @@ nuScenes/
     │   ├── kmeans_map_100.npy
     │   ├── kmeans_motion_6.npy
     │   └── kmeans_plan_6.npy
-    ├── nuscenes/
-    │   ├── can_bus/
-    │   ├── gts/
-    │   ├── lidarseg/
-    │   ├── maps/
-    │   ├── nuscenes_caption/
-    │   ├── samples/
-    │   ├── sweeps/
-    │   ├── v1.0-mini/
-    │   ├── v1.0-test/
-    │   └── v1.0-trainval/
-    └── others/
-        └── motion_anchor_infos_mode6.pkl
+    └── nuscenes/
+        ├── can_bus/
+        ├── gts/
+        ├── lidarseg/
+        ├── maps/
+        ├── nuscenes_caption/
+        ├── samples/
+        ├── sweeps/
+        ├── v1.0-mini/
+        ├── v1.0-test/
+        └── v1.0-trainval/
 ```
 
 ---
@@ -73,9 +72,9 @@ nuScenes/
 Download the [Bench2Drive Base](https://github.com/Thinklab-SJTU/Bench2Drive) dataset following the official [data preparation guide](https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/docs/DATA_PREP.md). Create a symbolic link:
 
 ```bash
-cd UniDriveVLA/Bench2Drive
+cd unidrivevla/Bench2Drive
 mkdir -p data
-ln -s /path/to/bench2drive ./data/bench2drive
+ln -s /path/to/bench2drive/* ./data/bench2drive
 ```
 
 ### 2. Generate Info PKL Files

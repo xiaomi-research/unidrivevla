@@ -10,3 +10,11 @@ motmetrics<=1.1.3
 pandas==1.2.2
 torchmetrics==0.6.2
 networkx==2.5
+mmdet==2.26.0
+mmsegmentation==0.29.1
+pyquaternion
+nuscenes-devkit
+prettytable
+shapely==1.8.5
+timm
+numpy==1.23.4
