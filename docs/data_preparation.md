@@ -7,7 +7,7 @@
 Download the [nuScenes dataset](https://www.nuscenes.org/nuscenes#download) and CAN bus expansion. Create a symbolic link:
 
 ```bash
-cd UniDriveVLA/nuScenes
+cd unidrivevla
 mkdir -p data
 ln -s /path/to/nuscenes ./data/nuscenes
 ```

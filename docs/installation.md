@@ -33,7 +33,7 @@ conda activate unidrivevla_eval
 ### 3. Install PyTorch
 
 ```bash
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ### 4. Install Transformers
@@ -60,7 +60,7 @@ export FORCE_CUDA=1
 export MMCV_NO_Compiler_CHECK=1
 pip install -r requirements.txt
 python setup.py build_ext --inplace
-pip install -e .
+pip install -e . --no-build-isolation
 cd ../..
 ```
 
@@ -68,15 +68,22 @@ cd ../..
 
 ```bash
 cd third_party/mmdetection3d-1.0.0rc6
-pip install -e .
+pip install -e . --no-build-isolation
 cd ../..
 ```
 
 ### 8. Install Training Dependencies
 
 ```bash
+pip install mmdet==2.26.0 mmsegmentation==0.29.1
 pip install deepspeed==0.14.4
+pip install pyquaternion
+pip install nuscenes-devkit
+pip install prettytable
+pip install shapely 
 pip install peft
+pip install timm
+pip install qwen_vl_utils
 ```
 
 ---
@@ -93,7 +100,7 @@ pip install -r requirements/requirements_nusc.txt
 
 ```bash
 cd nuScenes/projects/mmdet3d_plugin/ops
-pip install -e .
+pip install -e . --no-build-isolation
 cd ../../../..
 ```
 
