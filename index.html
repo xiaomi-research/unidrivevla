@@ -1,489 +1,507 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="description" content="UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving via Mixture-of-Transformers.">
-  <meta name="keywords" content="UniDriveVLA, Autonomous Driving, VLA, Vision-Language-Action, Mixture-of-Transformers">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving</title>
-
-  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
-  <link rel="stylesheet" href="./static/css/bulma.min.css">
-  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
-  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
-  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
-  <link rel="stylesheet" href="./static/css/index.css">
+  <meta name="description" content="UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving via Mixture-of-Transformers.">
+  <meta name="keywords" content="UniDriveVLA, Autonomous Driving, VLA, Mixture-of-Transformers, ReSPECT">
+  <title>UniDriveVLA — Unifying Understanding, Perception, and Action Planning</title>
   <link rel="icon" href="./static/images/UniDriveVLA_Logo.png">
-
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-  <script defer src="./static/js/fontawesome.all.min.js"></script>
-  <script src="./static/js/bulma-carousel.min.js"></script>
-  <script src="./static/js/bulma-slider.min.js"></script>
-  <script src="./static/js/index.js"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1.9.4/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css?v=8">
 </head>
 <body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#top">
+        <img src="./static/images/UniDriveVLA_Logo.png" alt="">
+        <span class="grad">UniDriveVLA</span>
+      </a>
+      <nav>
+        <ul class="nav-links">
+          <li><a href="#demos">Demos</a></li>
+          <li><a href="#method">Method</a></li>
+          <li><a href="#results">Results</a></li>
+          <li><a href="#bibtex">BibTeX</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
 
-<style>
-/* ===== Theme Colors (from Architecture: purple → green → yellow) ===== */
-:root {
-  --clr-understanding: #7C3AED;  /* purple - Understanding Expert */
-  --clr-perception:    #059669;  /* green  - Perception Expert */
-  --clr-planning:      #D97706;  /* amber  - Planning/Action Expert */
-  --clr-grad-start:    #7C3AED;
-  --clr-grad-mid:      #059669;
-  --clr-grad-end:      #D97706;
-}
+  <section class="hero" id="top">
+    <div class="wrap">
+      <img class="hero-logo" src="./static/images/UniDriveVLA_Logo.png" alt="UniDriveVLA">
+      <h1><span class="grad">UniDriveVLA</span></h1>
+      <p class="subtitle">Unifying Understanding, Perception, and Action Planning for Autonomous Driving</p>
+      <p class="lede">
+        A Mixture-of-Transformers driving VLA that decouples heterogeneous tasks,
+        preserves pretrained reasoning with ReSPECT, and plans continuously —
+        including a 10.4&nbsp;Hz real-time Flash variant.
+      </p>
 
-/* Hero background: light with subtle gradient tint */
-.hero-publication {
-  background: linear-gradient(135deg, #ede9fe 0%, #d1fae5 45%, #d1fae5 55%, #fef3c7 100%);
-}
+      <p class="authors">
+        <span class="author-block"><a href="https://owl-10.github.io/yongkangli/">Yongkang Li</a><sup>1</sup>,</span>
+        <span class="author-block">Yu Zhu<sup>1</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&amp;user=RYIXvAoAAAAJ">Lijun Zhou</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://sixu-yan.github.io/">Sixu Yan</a><sup>1</sup>,</span>
+        <span class="author-block"><a href="https://github.com/LegendBC">Bencheng Liao</a><sup>1</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=0JmbnNQAAAAJ&amp;hl=en">Tianyi Yan</a><sup>2,3</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=Kh01ChoAAAAJ&amp;hl=en">Kaixin Xiong</a><sup>2</sup>,</span>
+        <span class="author-block">Zhenxin Zhu<sup>2</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=kRvS9KAAAAAJ&amp;hl=en">Hongwei Xie</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&amp;user=SYbFNsIAAAAJ">Haiyang Sun</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=uwTzb6IAAAAJ&amp;hl=en">Bing Wang</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=yO82m38AAAAJ&amp;hl=en">Guang Chen</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://eic.hust.edu.cn/professor/liuwenyu/">Wenyu Liu</a><sup>1</sup>,</span>
+        <span class="author-block"><a href="https://scholar.google.com/citations?user=68tXhe8AAAAJ">Hangjun Ye</a><sup>2</sup>,</span>
+        <span class="author-block"><a href="https://xwcv.github.io/">Xinggang Wang</a><sup>✉1</sup></span>
+      </p>
+      <p class="affil">
+        <sup>1</sup> Huazhong University of Science and Technology &nbsp;
+        <sup>2</sup> Xiaomi EV &nbsp;
+        <sup>3</sup> SKL-IOTSC, University of Macau
+      </p>
+      <p class="note"><sup>✉</sup> Corresponding author.</p>
+      <div class="logos">
+        <img src="./static/images/hust_logo.png" alt="HUST">
+        <img src="./static/images/mi_logo.png" alt="Xiaomi EV">
+      </div>
+      <div class="cta">
+        <a class="btn" href="./static/UniDriveVLA.pdf"><i class="fa-solid fa-file-pdf"></i> Paper</a>
+        <a class="btn ghost" href="#demos"><i class="fa-solid fa-circle-play"></i> Demos</a>
+        <a class="btn ghost" href="https://arxiv.org/abs/2604.02190"><i class="ai ai-arxiv"></i> arXiv</a>
+        <a class="btn dark" href="https://github.com/xiaomi-research/unidrivevla"><i class="fa-brands fa-github"></i> Code</a>
+        <a class="btn amber" href="https://huggingface.co/collections/owl10/unidrivevla"><i class="ai ai-huggingface"></i> Models</a>
+        <a class="btn green" href="https://huggingface.co/datasets/owl10/UniDriveVLA_Data"><i class="fa-solid fa-database"></i> Data</a>
+      </div>
+    </div>
+  </section>
 
-/* Hero title: gradient text matching architecture colors */
-.hero-publication .publication-title span {
-  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
+  <section class="demos" id="demos">
+    <div class="wrap wide">
+      <h2>Demos</h2>
+      <p class="tldr">
+        Closed-loop rollouts on NeuroNCAP and Fail2Drive, plus open-loop nuScenes
+        scenes in complex traffic, night, and rain.
+      </p>
 
-/* Author names */
-.hero-publication .publication-authors {
-  color: #374151 !important;
-}
-.hero-publication .publication-authors a {
-  color: var(--clr-understanding) !important;
-  font-weight: 600;
-}
-.hero-publication .publication-authors a:hover {
-  color: var(--clr-perception) !important;
-}
+      <div class="demo-block">
+        <h3 class="demo-h purple">NeuroNCAP</h3>
+        <p class="demo-sub">Safety-critical closed-loop · stationary / frontal / side</p>
+        <div class="vgrid">
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/neuroncap/stationary-0101-run_2.jpg" data-src="./static/Video/neuroncap/stationary-0101-run_2.mp4"></video>
+            <figcaption>Stationary</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/neuroncap/frontal-0106-run_5.jpg" data-src="./static/Video/neuroncap/frontal-0106-run_5.mp4"></video>
+            <figcaption>Frontal</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/neuroncap/side-0103-run_4.jpg" data-src="./static/Video/neuroncap/side-0103-run_4.mp4"></video>
+            <figcaption>Side</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/neuroncap/side-0278-run_8.jpg" data-src="./static/Video/neuroncap/side-0278-run_8.mp4"></video>
+            <figcaption>Side</figcaption>
+          </figure>
+        </div>
+      </div>
 
-/* Affiliation / sup */
-.hero-publication .is-size-6.publication-authors {
-  color: #6b7280 !important;
-}
-.hero-publication sup {
-  color: var(--clr-planning) !important;
-}
+      <div class="demo-block">
+        <h3 class="demo-h green">Fail2Drive</h3>
+        <p class="demo-sub">Long-tail generalization · animals, parking, stop, crowd</p>
+        <div class="vgrid">
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/fail2drive/Generalization_Animals_1075.jpg" data-src="./static/Video/fail2drive/Generalization_Animals_1075.mp4"></video>
+            <figcaption>Animals</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/fail2drive/Generalization_BadParking_1006.jpg" data-src="./static/Video/fail2drive/Generalization_BadParking_1006.mp4"></video>
+            <figcaption>Bad parking</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/fail2drive/Generalization_ObscuredStop_1047.jpg" data-src="./static/Video/fail2drive/Generalization_ObscuredStop_1047.mp4"></video>
+            <figcaption>Obscured stop</figcaption>
+          </figure>
+          <figure class="vcard">
+            <video loop muted playsinline preload="none" poster="./static/Video/fail2drive/Generalization_PedestrianCrowd_1068.jpg" data-src="./static/Video/fail2drive/Generalization_PedestrianCrowd_1068.mp4"></video>
+            <figcaption>Pedestrian crowd</figcaption>
+          </figure>
+        </div>
+      </div>
 
-/* Title gradient text */
-.publication-title span {
-  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
+      <div class="demo-block">
+        <h3 class="demo-h amber">nuScenes · Complex</h3>
+        <p class="demo-sub">Open-loop planning in dense urban scenes</p>
+        <div class="vgrid">
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/complex/325cef682f064c55a255f2625c533b75.jpg" data-src="./static/Video/complex/325cef682f064c55a255f2625c533b75.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/complex/696a45dbd11346b794fdce43fa0a1770.jpg" data-src="./static/Video/complex/696a45dbd11346b794fdce43fa0a1770.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/complex/3dd9ad3f963e4f588d75c112cbf07f56.jpg" data-src="./static/Video/complex/3dd9ad3f963e4f588d75c112cbf07f56.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/complex/e7ef871f77f44331aefdebc24ec034b7.jpg" data-src="./static/Video/complex/e7ef871f77f44331aefdebc24ec034b7.mp4"></video></figure>
+        </div>
+      </div>
 
-/* Section title accent */
-h2.title.is-5 {
-  position: relative;
-  display: inline-block;
-  padding-bottom: 0.3em;
-}
-h2.title.is-5::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 0;
-  width: 100%;
-  height: 3px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning));
-}
+      <div class="demo-block">
+        <h3 class="demo-h purple">nuScenes · Night</h3>
+        <p class="demo-sub">Low-light open-loop planning</p>
+        <div class="vgrid">
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Dark/16be583c31a2403caa6c158bb55ae616.jpg" data-src="./static/Video/Dark/16be583c31a2403caa6c158bb55ae616.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Dark/e8834785d9ff4783a5950281a4579943.jpg" data-src="./static/Video/Dark/e8834785d9ff4783a5950281a4579943.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Dark/7052d21b95fc4bae8761b8d9524f3e42.jpg" data-src="./static/Video/Dark/7052d21b95fc4bae8761b8d9524f3e42.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Dark/f97bf749746c4c3a8ad9f1c11eab6444.jpg" data-src="./static/Video/Dark/f97bf749746c4c3a8ad9f1c11eab6444.mp4"></video></figure>
+        </div>
+      </div>
 
-/* Buttons */
-.button.is-primary {
-  background-color: var(--clr-understanding) !important;
-  border-color: transparent !important;
-}
-.button.is-primary:hover { filter: brightness(1.15); }
-
-.button.is-dark {
-  background-color: #1f2937 !important;
-}
-
-.button.is-warning {
-  background-color: var(--clr-planning) !important;
-  border-color: transparent !important;
-  color: #fff !important;
-}
-.button.is-warning:hover { filter: brightness(1.15); }
-
-.button.is-info {
-  background-color: var(--clr-perception) !important;
-  border-color: transparent !important;
-  color: #fff !important;
-}
-.button.is-info:hover { filter: brightness(1.15); }
-
-/* Section divider stripe */
-.section:nth-child(odd) {
-  background: #fafafa;
-}
-.section:nth-child(even) {
-  background: #ffffff;
-}
-
-/* Section top border accent - alternating colors */
-.section-understanding { border-top: 3px solid var(--clr-understanding); }
-.section-perception    { border-top: 3px solid var(--clr-perception); }
-.section-planning      { border-top: 3px solid var(--clr-planning); }
-.section-gradient      { border-top: 3px solid; border-image: linear-gradient(90deg, var(--clr-understanding), var(--clr-perception), var(--clr-planning)) 1; }
-
-/* Abstract title */
-h2.title.is-3 {
-  color: var(--clr-understanding);
-}
-
-/* BibTeX block */
-#BibTeX pre {
-  border-left: 4px solid var(--clr-perception);
-  background: #f0fdf4;
-  border-radius: 6px;
-}
-
-/* ===== Layout (unchanged) ===== */
-.section {
-  padding-top: 1.8rem !important;
-  padding-bottom: 1.8rem !important;
-}
-}
-.container.is-max-desktop {
-  max-width: 900px !important;
-}
-h1.title, h2.title, h3.title {
-  margin-bottom: 1rem !important;
-}
-p, .publication-caption {
-  margin-top: 0.5rem !important;
-  margin-bottom: 0.8rem !important;
-  line-height: 1.55 !important;
-  text-align: justify !important;
-}
-.publication-image-main img,
-.publication-image-arch img,
-.publication-image-fig img,
-.publication-image-vis img {
-  width: 100% !important;
-  height: auto !important;
-  object-fit: contain;
-  border-radius: 6px;
-}
-.column.is-four-fifths,
-.column.is-6,
-.column.is-centered {
-  flex: 0 0 100% !important;
-  max-width: 900px !important;
-  margin: 0 auto !important;
-}
-.abstract-section {
-  max-width: 900px !important;
-  margin: 0 auto !important;
-  font-size: 1em !important;
-  line-height: 1.55 !important;
-}
-.inst-logos {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 2em;
-  margin: 0.8em 0;
-}
-.inst-logos img {
-  height: 36px;
-  object-fit: contain;
-}
-</style>
-
-<!-- Hero / Title -->
-<section class="hero hero-publication">
-  <div class="hero-body">
-    <div class="container is-max-desktop">
-      <div class="columns is-centered">
-        <div class="column has-text-centered">
-
-          <h2 class="title is-4 publication-title"
-              style="display: flex; justify-content: center; align-items: center; gap: 0.5em; text-align: center;">
-            <img src="./static/images/UniDriveVLA_Logo.png" alt="UniDriveVLA Logo" style="width: 2.8em; height: 2.8em; object-fit: contain;">
-            <span>UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving</span>
-          </h2>
-
-          <div class="is-size-5 publication-authors">
-            <span class="author-block"><a href="https://owl-10.github.io/yongkangli/"><strong>Yongkang Li</strong></a><sup>1,2</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=RYIXvAoAAAAJ"><strong>Lijun Zhou</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://sixu-yan.github.io/"><strong>Sixu Yan</strong></a><sup>1</sup>,</span>
-            <span class="author-block"><a href="https://github.com/LegendBC"><strong>Bencheng Liao</strong></a><sup>1</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=0JmbnNQAAAAJ&hl=en&oi=ao"><strong>Tianyi Yan</strong></a><sup>2,3</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=Kh01ChoAAAAJ&hl=en&oi=ao"><strong>Kaixin Xiong</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://long.ooo/"><strong>Long Chen</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=kRvS9KAAAAAJ&hl=en&oi=ao"><strong>Hongwei Xie</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=uwTzb6IAAAAJ&hl=en&oi=sra"><strong>Bing Wang</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=yO82m38AAAAJ&hl=en"><strong>Guang Chen</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?user=68tXhe8AAAAJ"><strong>Hangjun Ye</strong></a><sup>2</sup>,</span>
-            <span class="author-block"><a href="https://eic.hust.edu.cn/professor/liuwenyu/"><strong>Wenyu Liu</strong></a><sup>1</sup>,</span>
-            <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&user=SYbFNsIAAAAJ"><strong>Haiyang Sun</strong></a><sup>†2</sup>,</span>
-            <span class="author-block"><a href="https://xwcv.github.io/"><strong>Xinggang Wang</strong></a><sup>✉1</sup></span>
-          </div>
-
-          <div class="is-size-6 publication-authors" style="margin-top:0.5em;">
-            <span class="author-block"><sup>1</sup>Huazhong University of Science and Technology &nbsp;</span>
-            <span class="author-block"><sup>2</sup>Xiaomi EV &nbsp;</span>
-            <span class="author-block"><sup>3</sup>SKL-IOTSC, University of Macau</span>
-            <br>
-            <span class="author-block"><sup>†</sup>Project Leader. &nbsp;</span>
-            <span class="author-block"><sup>✉</sup>Corresponding Author.</span>
-          </div>
-
-          <div class="inst-logos">
-            <img src="./static/images/hust_logo.png" alt="HUST">
-            <img src="./static/images/mi_logo.png" alt="Xiaomi EV">
-          </div>
-
-          <div class="column has-text-centered">
-            <div class="publication-links">
-              <span class="link-block">
-                <a href="https://arxiv.org/abs/2604.02190"
-                   class="external-link button is-normal is-rounded is-primary">
-                  <span class="icon"><i class="fas fa-file-pdf"></i></span>
-                  <span>arXiv</span>
-                </a>
-              </span>
-              <span class="link-block">
-                <a href="https://github.com/xiaomi-research/unidrivevla"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon"><i class="fab fa-github"></i></span>
-                  <span>Code</span>
-                </a>
-              </span>
-              <span class="link-block">
-                <a href="https://huggingface.co/collections/owl10/unidrivevla"
-                   class="external-link button is-normal is-rounded is-warning">
-                  <span class="icon"><i class="fas fa-brain"></i></span>
-                  <span>Model Weights</span>
-                </a>
-              </span>
-              <span class="link-block">
-                <a href="https://huggingface.co/datasets/owl10/UniDriveVLA_Data"
-                   class="external-link button is-normal is-rounded is-info">
-                  <span class="icon"><i class="fas fa-database"></i></span>
-                  <span>Data</span>
-                </a>
-              </span>
-            </div>
-          </div>
-
+      <div class="demo-block">
+        <h3 class="demo-h green">nuScenes · Rainy</h3>
+        <p class="demo-sub">Wet-weather open-loop planning</p>
+        <div class="vgrid">
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Rainy/7210f928860043b5a7e0d3dd4b3e80ff.jpg" data-src="./static/Video/Rainy/7210f928860043b5a7e0d3dd4b3e80ff.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Rainy/f5b29a1e09d04355adcd60ab72de006b.jpg" data-src="./static/Video/Rainy/f5b29a1e09d04355adcd60ab72de006b.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Rainy/b789de07180846cc972118ee6d1fb027.jpg" data-src="./static/Video/Rainy/b789de07180846cc972118ee6d1fb027.mp4"></video></figure>
+          <figure class="vcard"><video loop muted playsinline preload="none" poster="./static/Video/Rainy/d01e7279da2649ef896dc42f6b9ee7ab.jpg" data-src="./static/Video/Rainy/d01e7279da2649ef896dc42f6b9ee7ab.mp4"></video></figure>
         </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
+  <section class="section" id="method">
+    <div class="wrap wide">
+      <h2>Method</h2>
+      <p class="intro">
+        Adapting a pretrained VLM for driving often pits spatial perception against
+        semantic reasoning. A Mixture-of-Transformers gives Understanding, Perception,
+        and Action their own projections and FFNs; Masked Joint Attention lets them
+        talk only along U→P and {U,P}→A. ReSPECT then regularizes the Understanding
+        Expert so driving adaptation does not overwrite pretrained reasoning.
+      </p>
 
-<!-- Demo Videos -->
-<style>
-#demo-videos-wrap { width: 100% !important; max-width: 1600px !important; margin: 0 auto !important; padding: 0 16px !important; }
-.demo-row { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 32px !important; margin-bottom: 8px !important; }
-.demo-row video { width: 100% !important; height: auto !important; display: block !important; border-radius: 4px !important; }
-.demo-label { text-align: center !important; font-size: 1.2rem !important; font-weight: 700 !important; margin: 0 0 6px 0 !important; }
-</style>
-<section class="section section-gradient" style="padding: 1.8rem 0 !important;">
-  <div id="demo-videos-wrap">
-
-    <!-- Section Title -->
-    <div class="has-text-centered" style="margin-bottom:1.5rem;">
-      <h2 class="title is-2" style="margin-bottom:0;">Demo Videos</h2>
-    </div>
-
-    <!-- Complex Scene -->
-    <p class="demo-label" style="color:#7C3AED;">Complex Scene</p>
-    <div class="demo-row">
-      <video autoplay loop muted playsinline><source src="./static/Video/complex/325cef682f064c55a255f2625c533b75.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/complex/696a45dbd11346b794fdce43fa0a1770.mp4" type="video/mp4"></video>
-    </div>
-    <div class="demo-row" style="margin-bottom:1.5rem;">
-      <video autoplay loop muted playsinline><source src="./static/Video/complex/3dd9ad3f963e4f588d75c112cbf07f56.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/complex/e7ef871f77f44331aefdebc24ec034b7.mp4" type="video/mp4"></video>
-    </div>
-
-    <!-- Night -->
-    <p class="demo-label" style="color:#059669;">Night</p>
-    <div class="demo-row">
-      <video autoplay loop muted playsinline><source src="./static/Video/Dark/16be583c31a2403caa6c158bb55ae616.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/Dark/e8834785d9ff4783a5950281a4579943.mp4" type="video/mp4"></video>
-    </div>
-    <div class="demo-row" style="margin-bottom:1.5rem;">
-      <video autoplay loop muted playsinline><source src="./static/Video/Dark/7052d21b95fc4bae8761b8d9524f3e42.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/Dark/f97bf749746c4c3a8ad9f1c11eab6444.mp4" type="video/mp4"></video>
-    </div>
-
-    <!-- Rainy -->
-    <p class="demo-label" style="color:#D97706;">Rainy</p>
-    <div class="demo-row">
-      <video autoplay loop muted playsinline><source src="./static/Video/Rainy/7210f928860043b5a7e0d3dd4b3e80ff.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/Rainy/f5b29a1e09d04355adcd60ab72de006b.mp4" type="video/mp4"></video>
-    </div>
-    <div class="demo-row">
-      <video autoplay loop muted playsinline><source src="./static/Video/Rainy/b789de07180846cc972118ee6d1fb027.mp4" type="video/mp4"></video>
-      <video autoplay loop muted playsinline><source src="./static/Video/Rainy/d01e7279da2649ef896dc42f6b9ee7ab.mp4" type="video/mp4"></video>
-    </div>
-  </div>
-</section>
-
-
-<!-- Abstract -->
-<section class="section section-gradient">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-3">Abstract</h2>
-        <div class="content has-text-justified">
-          <p>
-            Vision-Language-Action (VLA) models have recently emerged in autonomous driving, with the promise of leveraging rich world knowledge to improve the cognitive capabilities of driving systems. However, adapting such models for driving tasks currently faces a critical dilemma between spatial perception and semantic reasoning. Consequently, existing VLA systems are forced into suboptimal compromises: directly adopting 2D Vision-Language Models yields limited spatial perception, whereas enhancing them with 3D spatial representations often impairs the native reasoning capacity of VLMs. We argue that this dilemma largely stems from the coupled optimization of spatial perception and semantic reasoning within shared model parameters. To overcome this, we propose <strong>UniDriveVLA</strong>, a unified driving Vision-Language-Action model based on <strong>Mixture-of-Transformers</strong> that addresses the perception–reasoning conflict via expert decoupling. Specifically, it comprises three experts for driving understanding, scene perception, and action planning, which are coordinated through masked joint attention. In addition, we combine a sparse perception paradigm with a three-stage progressive training strategy to improve spatial perception while maintaining semantic reasoning capability. Extensive experiments show that UniDriveVLA achieves state-of-the-art performance in open-loop evaluation on nuScenes and closed-loop evaluation on Bench2Drive. Moreover, it demonstrates strong performance across a broad range of perception, prediction, and understanding tasks, including 3D detection, online mapping, motion forecasting, and driving-oriented VQA.
-          </p>
-        </div>
+      <div class="cards">
+        <article class="card">
+          <div class="idx">A · Understanding</div>
+          <h3>Chain-of-Causation</h3>
+          <p>The Understanding Expert writes causal driving reasoning and never sees later streams. ReSPECT penalizes LoRA updates that land in the dominant singular subspaces of pretrained weights.</p>
+        </article>
+        <article class="card perception">
+          <div class="idx">B · Perception</div>
+          <h3>Sparse spatial states</h3>
+          <p>The Perception Expert reads that semantic context and extracts detection, map, and occupancy queries from multi-scale VLM features — geometry without a shared decoder.</p>
+        </article>
+        <article class="card action">
+          <div class="idx">C · Action</div>
+          <h3>Continuous planning</h3>
+          <p>The Action Expert aggregates both streams and decodes a future ego trajectory. Flash compresses the same pathway to 10.4&nbsp;Hz on one H100.</p>
+        </article>
       </div>
-    </div>
 
-    <!-- Fig 1: VLA paradigm comparison -->
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
-        <div class="publication-image-main">
-          <img src="./static/images/fig1.png" alt="Comparison of VLA paradigms for autonomous driving">
-          <p class="publication-caption">
-            <strong>Comparison of VLA paradigms for autonomous driving.</strong>
-            (a) Vanilla 2D VLA provides strong semantic reasoning but limited spatial perception.
-            (b) 3D-enhanced VLA improves spatial perception but may degrade semantic reasoning.
-            (c) UniDriveVLA decouples understanding, perception, and action with the Mixture-of-Transformers architecture, achieving both.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+      <figure class="paper-fig">
+        <img src="./static/images/fig1.png" alt="Comparison of VLA paradigms for autonomous driving">
+        <figcaption class="caption">
+          <strong>Fig. 1 · VLA paradigms.</strong>
+          Shared transformations force a trade-off between semantics and geometry.
+          UniDriveVLA assigns Understanding, Perception, and Action to separate experts
+          so both capabilities can improve together.
+        </figcaption>
+      </figure>
 
-
-<!-- Fig 2: Representation interference analysis -->
-<section class="section section-understanding">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-5">Representation Interference and Motivation</h2>
-      </div>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
+      <div class="prose">
         <p>
-          Existing 3D-enhanced VLA models inject spatial representations into a shared-weight decoder alongside semantic tokens. While this improves spatial awareness, it introduces <strong>representation interference</strong>: as depth increases, perception and semantic features progressively collapse toward identical representations, undermining the native reasoning capacity of the pre-trained VLM. We measure this interference by tracking cosine similarity between LLM tokens and perception tokens across layers, and show that a shared decoder causes similarity to approach 1, whereas our MoT design maintains low similarity throughout—confirming effective task decoupling.
-        </p>
-        <div class="publication-image-main">
-          <img src="./static/images/fig2.png" alt="Cosine similarity analysis and performance comparison">
-          <p class="publication-caption">
-            <strong>Analysis of representation interference and model performance.</strong>
-            (a) Cosine similarity between LLM tokens and perception tokens across layers. In the shared-weight decoder, the similarity progressively increases toward 1, indicating feature collapse into nearly identical representations, whereas MoT maintains low similarity and preserves task decoupling.
-            (b) Performance comparison. By mitigating optimization conflicts, UniDriveVLA consistently outperforms the shared-weight baseline across perception, reasoning, and planning metrics.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<!-- Fig 3: Architecture -->
-<section class="section section-perception">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-5">Architecture Overview</h2>
-      </div>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
-        <p>
-          UniDriveVLA is built on a <strong>Mixture-of-Transformers (MoT)</strong> backbone with three specialized experts: a <em>Understanding Expert</em> for semantic reasoning, a <em>Perception Expert</em> for spatial scene understanding, and an <em>Action Expert</em> for trajectory generation. Each expert maintains its own query/key/value projections, feed-forward networks, and normalization layers, preventing parameter sharing from forcing heterogeneous representations into the same subspace.
+          Semantic understanding, spatial perception, and action planning need different
+          representations and losses. When they share one Transformer, their gradients
+          compete. UniDriveVLA therefore uses a Mixture-of-Transformers: each expert
+          owns its QKV, output projection, and FFN. Masked Joint Attention then lets
+          information flow only along a directed hierarchy — Understanding stays causal
+          and cannot see later streams; Perception may read Understanding; Action reads both.
         </p>
         <p>
-          Across experts, information is coordinated through <strong>Masked Joint Attention</strong>: all token groups are concatenated and attend jointly, but a structured mask enforces the correct information flow—understanding tokens follow causal masking and are unaffected by perception or action tokens; perception tokens can attend to preceding understanding tokens to acquire semantic context; action tokens aggregate both semantic and spatial signals for planning. After attention, each group is routed back to its own expert pathway for further processing.
+          Separating experts does not freeze the pretrained VLM. Driving-domain LoRA
+          can still overwrite the singular subspaces that carry semantic reasoning.
+          ReSPECT keeps the usual low-rank update ΔW = (α/r)BA, but penalizes the
+          fraction of update energy that lands in the top-k input and output singular
+          subspaces of the frozen weight. Sparse perception then extracts detection,
+          map, and occupancy queries from multi-scale VLM features; the Action Expert
+          folds that geometry into continuous trajectory decoding.
         </p>
+      </div>
+
+      <figure class="paper-fig">
+        <img src="./static/images/fig_arch.png" alt="UniDriveVLA architecture overview">
+        <figcaption class="caption">
+          <strong>Fig. 2 · Architecture.</strong>
+          Three experts coordinated by Masked Joint Attention. Sparse detection, mapping,
+          and occupancy feed continuous trajectory generation. Colors follow the paper:
+          lavender Understanding, mint Perception, apricot Action.
+        </figcaption>
+      </figure>
+
+      <div class="prose">
         <p>
-          The model is trained with a unified objective combining autoregressive language modeling (<em>L</em><sub>ar</sub>), structured perception supervision (<em>L</em><sub>per</sub>), and flow-matching-based trajectory generation (<em>L</em><sub>act</sub>), enabling end-to-end joint optimization across all three capabilities.
+          UniDriveVLA-Flash keeps the same expert split and speeds up the graph:
+          VisionZip compresses multi-view tokens, perception-conditioned normalization
+          modulates the action suffix without lengthening it, and learnable action
+          queries replace iterative flow-matching. With TF32, SDPA, <code>torch.compile</code>,
+          CUDA Graphs, and TensorRT, the full stack runs at 10.40&nbsp;Hz on one H100
+          (96&nbsp;ms, 7.91× vs. the 1.31&nbsp;Hz baseline) with only a 0.05&nbsp;m ST-P3 L2 increase.
         </p>
-        <div class="publication-image-main">
-          <img src="./static/images/fig3.png" alt="UniDriveVLA Architecture Overview">
-          <p class="publication-caption">
-            <strong>Architecture overview of UniDriveVLA.</strong>
-            UniDriveVLA adopts a Mixture-of-Transformers architecture with three specialized experts for driving understanding, scene perception, and action planning. By decoupling heterogeneous tokens into dedicated experts and coordinating them through masked joint attention, the model mitigates optimization conflicts and unifies understanding, perception, and planning within a single framework.
-          </p>
+      </div>
+
+      <figure class="paper-fig">
+        <img src="./static/images/fig_flash.png" alt="UniDriveVLA-Flash architecture and latency breakdown">
+        <figcaption class="caption">
+          <strong>Fig. 3 · UniDriveVLA-Flash.</strong>
+          A streamlined pathway with visual token compression and perception-conditioned
+          action queries, plus cumulative latency on one H100 down to 96&nbsp;ms (10.40&nbsp;Hz).
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section" id="results">
+    <div class="wrap wide">
+      <h2>Results</h2>
+      <p class="intro">
+        UniDriveVLA leads matched open-loop and closed-loop planning protocols,
+        remains competitive on spatial perception, and keeps driving-oriented
+        understanding after domain adaptation.
+      </p>
+
+      <div class="stats">
+        <div class="stat"><b>94.50</b><span>Bench2Drive DS · LEAD</span></div>
+        <div class="stat"><b>4.83</b><span>NeuroNCAP score · 4.0% CR</span></div>
+        <div class="stat"><b>71.94</b><span>Fail2Drive HM · generalization</span></div>
+        <div class="stat"><b>10.4 Hz</b><span>UniDriveVLA-Flash · H100</span></div>
+      </div>
+
+      <h3 class="sec-h">NeuroNCAP closed-loop safety</h3>
+      <p class="intro tight">
+        Highest score and lowest collision rate in every interaction type.
+        Side encounters record no collisions; the average collision rate drops
+        nearly an order of magnitude versus prior VLAs (36.8% → 4.0%).
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th rowspan="2">Method</th>
+              <th colspan="2">Stationary</th>
+              <th colspan="2">Frontal</th>
+              <th colspan="2">Side</th>
+              <th colspan="2">Average</th>
+            </tr>
+            <tr><th>NS ↑</th><th>CR ↓</th><th>NS ↑</th><th>CR ↓</th><th>NS ↑</th><th>CR ↓</th><th>NS ↑</th><th>CR ↓</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>UniAD</td><td>0.84</td><td>87.8%</td><td>0.10</td><td>98.4%</td><td>1.26</td><td>79.6%</td><td>0.73</td><td>88.6%</td></tr>
+            <tr><td>ImpromptuVLA</td><td>2.55</td><td>54.8%</td><td>1.86</td><td>72.8%</td><td>1.78</td><td>67.6%</td><td>2.06</td><td>65.1%</td></tr>
+            <tr><td>ColaVLA</td><td>3.54</td><td>32.3%</td><td>3.16</td><td>51.6%</td><td>3.75</td><td>26.4%</td><td>3.48</td><td>36.8%</td></tr>
+            <tr><td>ImagiDrive-S</td><td>4.15</td><td>33.8%</td><td>2.45</td><td>74.0%</td><td>3.88</td><td>26.8%</td><td>3.49</td><td>44.9%</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>4.89</td><td>2.2%</td><td>4.59</td><td>9.8%</td><td>5.00</td><td>0.0%</td><td>4.83</td><td>4.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sec-h">Fail2Drive long-tail generalization</h3>
+      <p class="intro tight">
+        100 matched route pairs keep the driving context fixed while shifting the
+        long-tail object. In-distribution HM 85.40; generalization HM 71.94,
+        +4.44 over TFv5 on the shifted split.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th rowspan="2">Method</th>
+              <th colspan="3">In-distribution</th>
+              <th colspan="3">Generalization</th>
+            </tr>
+            <tr><th>DS</th><th>SR</th><th>HM</th><th>DS</th><th>SR</th><th>HM</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ORION</td><td>53.0</td><td>52.0</td><td>52.5</td><td>51.2</td><td>46.0</td><td>48.5</td></tr>
+            <tr><td>SimLingo</td><td>82.6</td><td>79.3</td><td>80.9</td><td>71.7</td><td>55.0</td><td>62.2</td></tr>
+            <tr><td>TFv5</td><td>83.3</td><td>78.5</td><td>80.8</td><td>75.4</td><td>61.1</td><td>67.5</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>85.80</td><td>85.0</td><td>85.40</td><td>76.37</td><td>68.0</td><td>71.94</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="paper-fig">
+        <div class="qleg">
+          <span><b>1)</b> animals</span>
+          <span><b>2)</b> bad parking</span>
+          <span><b>3)</b> construction pedestrian</span>
+          <span>red–yellow: ego plan · blue: traffic agents</span>
         </div>
-      </div>
-    </div>
-  </div>
-</section>
+        <img src="./static/images/fig5_fail2drive.png" alt="Fail2Drive qualitative closed-loop planning">
+        <figcaption class="caption">
+          <strong>Fig. 5 · Fail2Drive qualitative.</strong>
+          Camera observations and bird’s-eye predictions under long-tail shifts.
+          The model keeps a feasible ego plan while yielding to atypical agents.
+        </figcaption>
+      </figure>
 
-
-<!-- Results: Bench2Drive -->
-<section class="section section-planning">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-5">Performance on Bench2Drive Closed-Loop Evaluation</h2>
+      <h3 class="sec-h">Bench2Drive closed-loop</h3>
+      <p class="intro tight">
+        Under Think2Drive, UniDriveVLA posts the best Efficiency (198.86) and Driving Score (78.37)
+        among listed methods, and ranks first in merge / overtake. LEAD expert data
+        raises SR to 87.16% and DS to 94.50, with mean multi-ability 78.99%.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Method</th><th>Data</th><th>Eff. ↑</th><th>SR ↑</th><th>DS ↑</th><th>Ability mean ↑</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>ReCogDrive</td><td>Think2Drive</td><td>138.18</td><td>45.45</td><td>71.36</td><td>42.03</td></tr>
+            <tr><td>ORION</td><td>Think2Drive</td><td>151.48</td><td>54.62</td><td>77.74</td><td>54.72</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>Think2Drive</td><td>198.86</td><td>51.82</td><td>78.37</td><td>51.53</td></tr>
+            <tr><td>TFv6 (vision-only)</td><td>LEAD</td><td>—</td><td>79.50</td><td>91.60</td><td>—</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>LEAD</td><td>200.27</td><td>87.16</td><td>94.50</td><td>78.99</td></tr>
+          </tbody>
+        </table>
       </div>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
+
+      <h3 class="sec-h">nuScenes open-loop planning · no ego-state</h3>
+      <p class="intro tight">
+        Without ego-state input, UniDriveVLA-Large reaches the lowest average L2
+        under both ST-P3 (0.49&nbsp;m) and UniAD (0.88&nbsp;m).
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>ST-P3 L2 ↓</th>
+              <th>ST-P3 CR ↓</th>
+              <th>UniAD L2 ↓</th>
+              <th>UniAD CR ↓</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>FSDrive</td><td>0.53</td><td>0.17</td><td>0.96</td><td>0.40</td></tr>
+            <tr><td>SparseDrive‡</td><td>0.55</td><td>0.08</td><td>0.99</td><td>0.21</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>0.50</td><td>0.11</td><td>0.91</td><td>0.27</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Large</td><td>0.49</td><td>0.13</td><td>0.88</td><td>0.31</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sec-h">Perception and driving-oriented understanding</h3>
+      <p class="intro tight">
+        The Perception Expert reports detection, mapping, and motion on nuScenes val.
+        Understanding stays competitive after driving adaptation, with the highest
+        Lingo-Judge of 75.2.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Det mAP ↑</th>
+              <th>NDS ↑</th>
+              <th>Map mAP ↑</th>
+              <th>minADE ↓</th>
+              <th>Lingo-Judge ↑</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>VAD</td><td>0.276</td><td>0.397</td><td>0.476</td><td>—</td><td>—</td></tr>
+            <tr><td>ReCogDrive (8B)</td><td>—</td><td>—</td><td>—</td><td>—</td><td>67.2</td></tr>
+            <tr><td>RoboTron-Drive</td><td>—</td><td>—</td><td>—</td><td>—</td><td>69.2</td></tr>
+            <tr class="ours"><td>UniDriveVLA-Base</td><td>0.405</td><td>0.466</td><td>0.433</td><td>0.801</td><td>—</td></tr>
+            <tr class="ours"><td>UniDriveVLA (8B)</td><td>0.414</td><td>0.483</td><td>0.429</td><td>0.842</td><td>75.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sec-h">MoT vs shared decoder</h3>
+      <p class="intro tight">
+        Replacing a shared-weight decoder with Mixture-of-Transformers lifts LingoQA
+        from 60.0 to 74.2 and cuts the NeuroNCAP collision rate from 31.1% to 4.0%,
+        while detection NDS and map mAP also rise.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Architecture</th>
+              <th>General VQA ↑</th>
+              <th>LingoQA ↑</th>
+              <th>Det NDS ↑</th>
+              <th>Map mAP ↑</th>
+              <th>NS ↑</th>
+              <th>CR ↓</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Shared-weight decoder</td><td>49.18</td><td>60.0</td><td>0.437</td><td>0.407</td><td>3.45</td><td>31.1%</td></tr>
+            <tr class="ours"><td>Mixture-of-Transformers</td><td>50.62</td><td>74.2</td><td>0.466</td><td>0.433</td><td>4.83</td><td>4.0%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="sec-h">UniDriveVLA-Flash on H100</h3>
+      <p class="intro tight">
+        Each row includes all preceding optimizations. Planning is ST-P3 average L2 / CR
+        without ego-status. The full TensorRT stack is the Flash configuration.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Configuration</th>
+              <th>Latency ↓</th>
+              <th>Hz ↑</th>
+              <th>Speedup ↑</th>
+              <th>ST-P3 L2 / CR</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>UniDriveVLA-Base</td><td>0.761 s</td><td>1.31</td><td>1.00×</td><td>0.50 / 0.11</td></tr>
+            <tr><td>+ Visual token compression</td><td>0.651 s</td><td>1.54</td><td>1.17×</td><td>0.50 / 0.13</td></tr>
+            <tr><td>+ Perception modulation</td><td>0.599 s</td><td>1.67</td><td>1.27×</td><td>0.58 / 0.15</td></tr>
+            <tr><td>+ Learnable action queries</td><td>0.290 s</td><td>3.45</td><td>2.63×</td><td>0.55 / 0.15</td></tr>
+            <tr><td>+ TF32 + SDPA</td><td>0.252 s</td><td>3.97</td><td>3.02×</td><td>0.54 / 0.14</td></tr>
+            <tr><td>+ Compile + CUDA Graphs</td><td>0.169 s</td><td>5.92</td><td>4.50×</td><td>0.55 / 0.13</td></tr>
+            <tr class="ours"><td>+ TensorRT (Flash)</td><td>0.096 s</td><td>10.40</td><td>7.91×</td><td>0.55 / 0.13</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="prose">
         <p>
-          For closed-loop evaluation, we test on the CARLA-based Bench2Drive benchmark, which assesses real driving competence through scenario success rate and a composite Driving Score. UniDriveVLA achieves a Driving Score of <strong>78.37</strong> and a scenario success rate of <strong>51.82%</strong>, outperforming prior end-to-end methods across both overall metrics and fine-grained ability tests covering merging, overtaking, emergency braking, give-way, and traffic sign compliance.
+          Occupancy is the largest closed-loop safety increment in the perception
+          ablation: NeuroNCAP score moves from 4.04 to 4.83 and collision rate from
+          19.8% to 4.0%. ReSPECT at (β<sub>Vis</sub>, β<sub>LM</sub>) = (0.010, 0.003)
+          raises Lingo-Judge from 66.8 (plain LoRA) to 74.2 and the NeuroNCAP score
+          from 4.09 to 4.83. After driving adaptation the 8B model still leads evaluated
+          VLAs on MMMU (47.2), VLMsAreBlind (29.6), and ChartQA (65.7).
         </p>
-        <div class="publication-image-main">
-          <img src="./static/images/result1.png" alt="Bench2Drive closed-loop results">
-          <p class="publication-caption">
-            Closed-loop evaluation on CARLA Bench2Drive. UniDriveVLA achieves a Driving Score of 78.37 and a scenario success rate of 51.82%, outperforming prior end-to-end methods across both closed-loop metrics and multi-ability tests (merging, overtaking, emergency braking, give-way, traffic sign compliance).
-          </p>
-        </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-
-<!-- Results: nuScenes -->
-<section class="section section-perception">
-  <div class="container is-max-desktop">
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-5">Performance on nuScenes Open-Loop Evaluation</h2>
+  <section class="section" id="bibtex">
+    <div class="wrap">
+      <div class="bib-head">
+        <h2>BibTeX</h2>
+        <button class="copy" id="copy-bib" type="button">Copy</button>
       </div>
-    </div>
-    <div class="columns is-centered">
-      <div class="column is-four-fifths">
-        <p>
-          We evaluate open-loop planning on the nuScenes benchmark using ST-P3 metrics. Both UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) achieve state-of-the-art L2 distance and collision rate, significantly outperforming prior end-to-end and VLA-based methods. The gains are consistent across all planning horizons (1s, 2s, 3s), demonstrating that expert decoupling improves planning without sacrificing trajectory quality.
-        </p>
-        <div class="publication-image-main">
-          <img src="./static/images/result2.png" alt="nuScenes open-loop results">
-          <p class="publication-caption">
-            UniDriveVLA achieves state-of-the-art open-loop planning performance on nuScenes (ST-P3 metrics). UniDriveVLA-Base (2B) and UniDriveVLA-Large (8B) both significantly outperform prior methods in L2 distance and collision rate.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<!-- BibTeX -->
-<section class="section section-gradient" id="BibTeX">
-  <div class="container is-max-desktop content">
-    <h2 class="title">BibTeX</h2>
-    <pre><code>@article{li2026unidrivevla,
+      <pre id="bibtex-text"><code>@article{li2026unidrivevla,
   title={UniDriveVLA: Unifying Understanding, Perception, and Action Planning for Autonomous Driving},
-  author={Li, Yongkang and Zhou, Lijun and Yan, Sixu and Liao, Bencheng and Yan, Tianyi and Xiong, Kaixin and Chen, Long and Xie, Hongwei and Wang, Bing and Chen, Guang and Ye, Hangjun and Sun, Haiyang and Liu, Wenyu and Wang, Xinggang},
+  author={Li, Yongkang and Zhu, Yu and Zhou, Lijun and Yan, Sixu and Liao, Bencheng and Yan, Tianyi and Xiong, Kaixin and Zhu, Zhenxin and Xie, Hongwei and Sun, Haiyang and Wang, Bing and Chen, Guang and Liu, Wenyu and Ye, Hangjun and Wang, Xinggang},
   journal={arXiv preprint arXiv:2604.02190},
   year={2026}
 }</code></pre>
-  </div>
-</section>
+    </div>
+  </section>
 
+  <footer>
+    <div class="wrap"><span class="grad">UniDriveVLA</span> project page · HUST &amp; Xiaomi EV</div>
+  </footer>
+  <script src="./static/js/index.js"></script>
 </body>
 </html>
