@@ -54,7 +54,9 @@ def fix_file(file_path):
 
 def main():
     """Main function to fix all files in the transformers directory."""
-    transformers_dir = Path("/high_perf_store3/world-model/yongkangli/ABCDEFG_NISHIDASHABI/A/B/UniDriveVLA/Bench2Drive/transformers-4.57.1")
+    transformers_dir = Path(
+        os.environ.get("TRANSFORMERS_DIR", Path(__file__).resolve().parent)
+    )
     
     if not transformers_dir.exists():
         print(f"Directory not found: {transformers_dir}")

@@ -400,7 +400,7 @@ class NllbMoeDenseActDense(nn.Module):
         hidden_states = self.act(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if (
-            isinstance(self.fc2.weight, "torch.Tensor")
+            isinstance(self.fc2.weight, torch.Tensor)
             and hidden_states.dtype != self.fc2.weight.dtype
             and (self.fc2.weight.dtype != torch.int8 and self.fc2.weight.dtype != torch.uint8)
         ):
@@ -1067,7 +1067,7 @@ class NllbMoeEncoder(NllbMoePreTrainedModel):
                 # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
                 attention_mask = _prepare_4d_attention_mask_for_sdpa(attention_mask, inputs_embeds.dtype)
             elif self.config._attn_implementation == "flex_attention":
-                if isinstance(attention_mask, "torch.Tensor"):
+                if isinstance(attention_mask, torch.Tensor):
                     attention_mask = make_flex_block_causal_mask(attention_mask, is_causal=False)
             else:
                 # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
@@ -1368,7 +1368,7 @@ class NllbMoeDecoder(NllbMoePreTrainedModel):
                 past_key_values_length,
             )
         elif self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             # Other attention flavors support in-built causal (when `mask is None`)
             # while we need to create our specific block mask regardless
@@ -1409,7 +1409,7 @@ class NllbMoeDecoder(NllbMoePreTrainedModel):
                     tgt_len=input_shape[-1],
                 )
             elif self.config._attn_implementation == "flex_attention":
-                if isinstance(encoder_attention_mask, "torch.Tensor"):
+                if isinstance(encoder_attention_mask, torch.Tensor):
                     encoder_attention_mask = make_flex_block_causal_mask(
                         encoder_attention_mask,
                         query_length=input_shape[-1],

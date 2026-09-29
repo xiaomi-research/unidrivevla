@@ -114,7 +114,7 @@ class MegaSimpleRelativePositionalBias(nn.Module):
         super().__init__()
         self.config = config
         self.max_positions = self.config.max_positions if self.config.chunk_size < 0 else self.config.chunk_size
-        self.rel_pos_bias = nn.Parameter("torch.Tensor"(2 * config.max_positions - 1))
+        self.rel_pos_bias = nn.Parameter(torch.Tensor(2 * config.max_positions - 1))
 
     def forward(self, seq_len):
         if seq_len > self.max_positions:
@@ -156,8 +156,8 @@ class MegaRotaryRelativePositionalBias(nn.Module):
         )
         # alpha and beta parameters for the rotary bias; beta renamed to b_param to avoid clashes with tf/flax weight handling
         # in loading pretrained weights
-        self.alpha = nn.Parameter("torch.Tensor"(1, self.embed_dim))
-        self.b_param = nn.Parameter("torch.Tensor"(1, self.embed_dim))
+        self.alpha = nn.Parameter(torch.Tensor(1, self.embed_dim))
+        self.b_param = nn.Parameter(torch.Tensor(1, self.embed_dim))
         self.register_buffer("_float_tensor", "torch.FloatTensor"([0.0]))
 
     @staticmethod
@@ -238,7 +238,7 @@ class MegaRMSNorm(nn.Module):
         self.eps = eps
         self.affine = affine
         if affine:
-            self.weight = nn.Parameter("torch.Tensor"(self.num_features))
+            self.weight = nn.Parameter(torch.Tensor(self.num_features))
         else:
             self.register_parameter("weight", None)
 
@@ -266,7 +266,7 @@ class MegaScaleNorm(nn.Module):
         self.eps = eps
         self.affine = affine
         if affine:
-            self.scalar = nn.Parameter("torch.Tensor"(1))
+            self.scalar = nn.Parameter(torch.Tensor(1))
         else:
             self.register_parameter("scalar", None)
 
@@ -331,14 +331,14 @@ class MegaMultiDimensionDampedEma(nn.Module):
 
         kernel_dim = 2 * config.hidden_size if self.bidirectional else config.hidden_size
         # renamed delta (damping_factor) and alpha (decay_factor) to be more descriptive of what the parameters are doing
-        self.damping_factor = nn.Parameter("torch.Tensor"(kernel_dim, self.ndim, 1))
-        self.decay_factor = nn.Parameter("torch.Tensor"(kernel_dim, self.ndim, 1))
+        self.damping_factor = nn.Parameter(torch.Tensor(kernel_dim, self.ndim, 1))
+        self.decay_factor = nn.Parameter(torch.Tensor(kernel_dim, self.ndim, 1))
         # renamed gamma (kernel_projection_matrix) and beta (ema_expansion_matrix) respectively to avoid HF renaming
         # things and align with the paper's description of these params' behavior
-        self.ema_expansion_matrix = nn.Parameter("torch.Tensor"(kernel_dim, self.ndim, 1))
-        self.kernel_projection_matrix = nn.Parameter("torch.Tensor"(kernel_dim, self.ndim))
+        self.ema_expansion_matrix = nn.Parameter(torch.Tensor(kernel_dim, self.ndim, 1))
+        self.kernel_projection_matrix = nn.Parameter(torch.Tensor(kernel_dim, self.ndim))
         # renamed omega to residual_weight to describe what it's doing
-        self.residual_weight = nn.Parameter("torch.Tensor"(config.hidden_size))
+        self.residual_weight = nn.Parameter(torch.Tensor(config.hidden_size))
         self._kernel = None
         self._coeffs = None
 
@@ -813,8 +813,8 @@ class MegaMovingAverageGatedAttention(nn.Module):
         )
         self.h_proj = nn.Linear(self.config.intermediate_size, self.config.hidden_size)
 
-        self.qk_weight = nn.Parameter("torch.Tensor"(2, self.config.shared_representation_size))
-        self.qk_bias = nn.Parameter("torch.Tensor"(2, self.config.shared_representation_size))
+        self.qk_weight = nn.Parameter(torch.Tensor(2, self.config.shared_representation_size))
+        self.qk_bias = nn.Parameter(torch.Tensor(2, self.config.shared_representation_size))
 
         if self.config.relative_positional_bias == "simple":
             self.rel_pos_bias = MegaSimpleRelativePositionalBias(config)

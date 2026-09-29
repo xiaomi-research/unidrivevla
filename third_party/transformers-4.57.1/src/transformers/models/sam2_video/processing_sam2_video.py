@@ -115,7 +115,7 @@ class Sam2VideoProcessor(ProcessorMixin):
                 **kwargs,
             )
         elif original_sizes is not None:
-            if isinstance(original_sizes, "torch.Tensor"):
+            if isinstance(original_sizes, torch.Tensor):
                 original_sizes = original_sizes.cpu().tolist()
             encoding_image_processor = BatchEncoding({"original_sizes": original_sizes}, tensor_type=return_tensors)
         else:
@@ -242,7 +242,7 @@ class Sam2VideoProcessor(ProcessorMixin):
             return None
 
         # Convert tensor/numpy to list if we're at a leaf level or if it's a multi-dimensional array
-        if isinstance(data, "torch.Tensor"):  # PyTorch tensor
+        if isinstance(data, torch.Tensor):  # PyTorch tensor
             if current_depth == expected_depth - 2 or len(data.shape) <= 2:  # At coordinate level or small tensor
                 return data.numpy().tolist()
             else:
@@ -390,7 +390,7 @@ class Sam2VideoProcessor(ProcessorMixin):
             if len(input_list) == 0:
                 return 1
             return 1 + self._get_nesting_level(input_List[0])
-        elif isinstance(input_list, (np.ndarray, "torch.Tensor")):
+        elif isinstance(input_list, (np.ndarray, torch.Tensor)):
             # For arrays/tensors, the nesting level is the number of dimensions
             return len(input_list.shape)
         return 0
@@ -423,7 +423,7 @@ class Sam2VideoProcessor(ProcessorMixin):
             return None
 
         # Handle tensors and numpy arrays first
-        if isinstance(data, ("torch.Tensor", np.ndarray)):
+        if isinstance(data, (torch.Tensor, np.ndarray)):
             # For tensors/arrays, we can directly check the number of dimensions
             if data.ndim != expected_depth:
                 raise ValueError(
@@ -784,7 +784,7 @@ class Sam2VideoProcessor(ProcessorMixin):
             device = inference_session.inference_device
 
             # Process mask
-            if not isinstance(mask, "torch.Tensor"):
+            if not isinstance(mask, torch.Tensor):
                 mask = torch.tensor(mask, dtype=torch.bool)
             nb_dim = mask.dim()
             if nb_dim > 4 or nb_dim < 2:

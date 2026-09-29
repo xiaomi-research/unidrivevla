@@ -128,7 +128,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         for key, value in model_kwargs.items():  # deepcopy crashes if we attempt to copy encoder outputs with grads
             if key not in ("encoder_outputs", "past_key_values"):
                 assistant_kwargs[key] = (
-                    value.detach().to(device) if isinstance(value, "torch.Tensor") else copy.deepcopy(value)
+                    value.detach().to(device) if isinstance(value, torch.Tensor) else copy.deepcopy(value)
                 )
 
         # Remove potential default "logits_to_keep" key

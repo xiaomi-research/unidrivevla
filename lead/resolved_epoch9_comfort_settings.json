@@ -1,0 +1,28 @@
+{
+  "evaluation_command": "LEAD_STAGE3_DS87_EPOCH9_GPU_IDS=0,1,2,3,4,5,6,7 bash launch_latest_4hz_stage3_ds87_epoch9_comfort_full220.sh",
+  "dataset": "bench2drive",
+  "route_count": 220,
+  "control_mode": "tfv6_route_speed",
+  "use_kalman": true,
+  "creeping": true,
+  "creep_point_source": "single_lidar",
+  "stop_sign": false,
+  "temporal_mode": "close_loop",
+  "command_source": "current",
+  "route_planner": "lead",
+  "route_pop_distance": 5.0,
+  "route_pop_adaptive": true,
+  "resume_skip_finished": true,
+  "resume_require_comfort_metrics": true,
+  "comfort_metric_fields": [
+    "acceleration",
+    "angular_velocity",
+    "forward_vector",
+    "right_vector",
+    "location",
+    "rotation"
+  ],
+  "checkpoint": "external: Bench2Drive/work_dirs2/unidrivevla_lead_stage3_motion_4hz8_2b_4node32gpu_bs16_accum1_9ep_from_stage2_ds87_iter11358_keep9/iter_17037/global_step17037/mp_rank_00_model_states.pt",
+  "qwen_base": "external: ACL-2026/CKPT/Qwen3-VL-2B-Instruct",
+  "carla": "external: ABCDEFG_NISHIDASHABI/A/B/UniDriveVLA/Bench2Drive/carla_new"
+}

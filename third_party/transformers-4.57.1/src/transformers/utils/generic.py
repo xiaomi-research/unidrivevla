@@ -145,7 +145,7 @@ def is_numpy_array(x):
 def _is_torch(x):
     import torch
 
-    return isinstance(x, "torch.Tensor")
+    return isinstance(x, torch.Tensor)
 
 
 def is_torch_tensor(x):
@@ -719,7 +719,7 @@ def torch_int(x):
 
     import torch
 
-    return x.to(torch.int64) if torch.jit.is_tracing() and isinstance(x, "torch.Tensor") else int(x)
+    return x.to(torch.int64) if torch.jit.is_tracing() and isinstance(x, torch.Tensor) else int(x)
 
 
 def torch_float(x):
@@ -731,7 +731,7 @@ def torch_float(x):
 
     import torch
 
-    return x.to(torch.float32) if torch.jit.is_tracing() and isinstance(x, "torch.Tensor") else int(x)
+    return x.to(torch.float32) if torch.jit.is_tracing() and isinstance(x, torch.Tensor) else int(x)
 
 
 def filter_out_non_signature_kwargs(extra: Optional[list] = None):

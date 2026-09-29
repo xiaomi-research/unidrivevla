@@ -4023,7 +4023,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
             # We're going to remove aliases before saving
             ptrs = collections.defaultdict(list)
             for name, tensor in state_dict.items():
-                if not isinstance(tensor, "torch.Tensor"):
+                if not isinstance(tensor, torch.Tensor):
                     # Sometimes in the state_dict we have non-tensor objects.
                     # e.g. in bitsandbytes we have some `str` objects in the state_dict
                     # In the non-tensor case, fall back to the pointer of the object itself
@@ -4157,7 +4157,7 @@ class PreTrainedModel(nn.Module, EmbeddingAccessMixin, ModuleUtilsMixin, PushToH
                     # note that get_state_dict_from_offload can update with meta tensors
                     # if both a parent module and its descendant are offloaded
                     tensor = shard_state_Dict[module_name]
-                    if tensor == "" or (isinstance(tensor, "torch.Tensor") and tensor.device.type == "meta"):
+                    if tensor == "" or (isinstance(tensor, torch.Tensor) and tensor.device.type == "meta"):
                         # update state dict with onloaded parameters
                         module = module_map[module_name]
                         shard_state_dict = get_state_dict_from_offload(module, module_name, shard_state_dict)

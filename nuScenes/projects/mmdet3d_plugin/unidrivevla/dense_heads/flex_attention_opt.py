@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import os
 import torch
 from packaging.version import Version
 
@@ -27,8 +28,7 @@ else:
     flex_attention = None
 
 
-@torch.compile(mode="max-autotune-no-cudagraphs")
-def compiled_flex_attention_wrapper(
+def _flex_attention_wrapper(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -42,6 +42,14 @@ def compiled_flex_attention_wrapper(
         block_mask=block_mask,
         scale=scale,
         enable_gqa=True
+    )
+
+
+if os.environ.get("UNIDRIVE_DISABLE_COMPILED_FLEX", "0").lower() in ("1", "true", "yes", "on"):
+    compiled_flex_attention_wrapper = _flex_attention_wrapper
+else:
+    compiled_flex_attention_wrapper = torch.compile(
+        _flex_attention_wrapper, mode="max-autotune-no-cudagraphs"
     )
 
 

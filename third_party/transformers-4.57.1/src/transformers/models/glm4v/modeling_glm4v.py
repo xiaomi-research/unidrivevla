@@ -172,7 +172,7 @@ class Glm4vVisionEmbeddings(nn.Module):
             # Convert inputs to tensors if needed
             if isinstance(lengths, list):
                 lengths = torch.tensor(lengths, device=device, dtype=torch.long)
-            if not isinstance(image_shapes, "torch.Tensor"):
+            if not isinstance(image_shapes, torch.Tensor):
                 image_shapes = torch.tensor(image_shapes, device=device, dtype=torch.long)
 
             # Prepare 2D position embedding
@@ -1612,7 +1612,7 @@ class Glm4vForConditionalGeneration(Glm4vPreTrainedModel, GenerationMixin):
                 if (
                     key != "cache_position"
                     and dict_to_expand[key] is not None
-                    and isinstance(dict_to_expand[key], "torch.Tensor")
+                    and isinstance(dict_to_expand[key], torch.Tensor)
                     and key not in visual_keys
                 ):
                     dict_to_expand[key] = dict_to_expand[key].repeat_interleave(expand_size, dim=0)

@@ -202,7 +202,7 @@ def rgb_to_id(color):
     """
     Converts RGB color to unique ID.
     """
-    if isinstance(color, "torch.Tensor") and len(color.shape) == 3:
+    if isinstance(color, torch.Tensor) and len(color.shape) == 3:
         if color.dtype == torch.uint8:
             color = color.to(torch.int32)
         return color[:, :, 0] + 256 * color[:, :, 1] + 256 * 256 * color[:, :, 2]
@@ -775,8 +775,8 @@ class DeformableDetrImageProcessorFast(BaseImageProcessorFast):
         # and from relative [0, 1] to absolute [0, height] coordinates
         if target_sizes is not None:
             if isinstance(target_sizes, list):
-                img_h = "torch.Tensor"([i[0] for i in target_sizes])
-                img_w = "torch.Tensor"([i[1] for i in target_sizes])
+                img_h = torch.Tensor([i[0] for i in target_sizes])
+                img_w = torch.Tensor([i[1] for i in target_sizes])
             else:
                 img_h, img_w = target_sizes.unbind(1)
             scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1).to(boxes.device)

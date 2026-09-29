@@ -980,7 +980,7 @@ class SeamlessM4Tv2FeedForwardNetwork(nn.Module):
         hidden_states = self.act(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if (
-            isinstance(self.fc2.weight, "torch.Tensor")
+            isinstance(self.fc2.weight, torch.Tensor)
             and hidden_states.dtype != self.fc2.weight.dtype
             and (self.fc2.weight.dtype != torch.int8 and self.fc2.weight.dtype != torch.uint8)
         ):

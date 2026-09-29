@@ -165,7 +165,7 @@ def _pad_to_max_length(
         timestamps_list = []
         for segments in current_segments:
             result = segments[0]["result"]
-            sequences_list.append(result if isinstance(result, "torch.Tensor") else result["sequences"])
+            sequences_list.append(result if isinstance(result, torch.Tensor) else result["sequences"])
             if return_token_timestamps:
                 timestamps_list.append(result["token_timestamps"])
 
@@ -322,13 +322,13 @@ class WhisperGenerationMixin(GenerationMixin):
             elif isinstance(num_frames, (list, tuple, np.ndarray)) and len(np.unique(num_frames)) == 1:
                 weights = weights[..., : num_frames[0] // 2]
 
-            elif isinstance(num_frames, ("torch.Tensor")) and len(torch.unique(num_frames)) == 1:
+            elif isinstance(num_frames, (torch.Tensor)) and len(torch.unique(num_frames)) == 1:
                 weights = weights[..., : num_frames[0] // 2]
 
             else:
                 # num_frames is of shape (batch_size,) whereas batch_size is truly batch_size*num_return_sequences
                 repeat_time = batch_size if isinstance(num_frames, int) else batch_size // len(num_frames)
-                num_frames = num_frames.cpu() if isinstance(num_frames, ("torch.Tensor")) else num_frames
+                num_frames = num_frames.cpu() if isinstance(num_frames, (torch.Tensor)) else num_frames
                 num_frames = np.repeat(num_frames, repeat_time)
 
         # let's ignore decoder_input_ids that can negatively impact the DTW while we know they have timestamps 0.0s
@@ -353,7 +353,7 @@ class WhisperGenerationMixin(GenerationMixin):
 
         # Perform dynamic time warping on each element of the batch.
         for batch_idx in range(batch_size):
-            if num_frames is not None and isinstance(num_frames, (tuple, list, np.ndarray, "torch.Tensor")):
+            if num_frames is not None and isinstance(num_frames, (tuple, list, np.ndarray, torch.Tensor)):
                 matrix = weights[batch_idx, ..., : num_frames[batch_idx] // 2]
 
                 # Normalize and smoothen the weights.
@@ -1151,7 +1151,7 @@ class WhisperGenerationMixin(GenerationMixin):
         # should happen only if it is the first generated segment
         start_idx = decoder_input_ids.shape[-1]
 
-        if isinstance(seek_outputs, "torch.Tensor"):
+        if isinstance(seek_outputs, torch.Tensor):
             return seek_outputs[:, start_idx:], seek_outputs
 
         if return_token_timestamps and hasattr(generation_config, "alignment_heads"):
@@ -1705,7 +1705,7 @@ class WhisperGenerationMixin(GenerationMixin):
                 )
             if "num_frames" in kwargs:
                 generation_config.num_frames = kwargs.pop("num_frames")
-                if isinstance(generation_config.num_frames, "torch.Tensor"):
+                if isinstance(generation_config.num_frames, torch.Tensor):
                     generation_config.num_frames = generation_config.num_frames.cpu()
                 else:
                     generation_config.num_frames = torch.tensor(generation_config.num_frames)

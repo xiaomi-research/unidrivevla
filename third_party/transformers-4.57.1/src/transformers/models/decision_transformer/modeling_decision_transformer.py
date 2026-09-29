@@ -648,7 +648,7 @@ class DecisionTransformerGPT2Model(DecisionTransformerGPT2PreTrainedModel):
                 # Ensure that attention_mask is always on the same device as hidden_states
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(hidden_states.device)
-                if isinstance(head_mask, "torch.Tensor"):
+                if isinstance(head_mask, torch.Tensor):
                     head_mask = head_mask.to(hidden_states.device)
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)

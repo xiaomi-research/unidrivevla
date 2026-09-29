@@ -319,3 +319,5 @@ if __name__ == "__main__":
         "fork"
     )  # use fork workers_per_gpu can be > 1
     main()
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()

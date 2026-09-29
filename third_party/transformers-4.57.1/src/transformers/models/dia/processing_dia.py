@@ -394,7 +394,7 @@ class DiaProcessor(ProcessorMixin):
         sampling_rate = audio_kwargs["sampling_rate"]
 
         for audio_value, p in zip(audio, saving_path):
-            if isinstance(audio_value, "torch.Tensor"):
+            if isinstance(audio_value, torch.Tensor):
                 audio_value = audio_value.cpu().float().numpy()
             sf.write(p, audio_value, sampling_rate)
 

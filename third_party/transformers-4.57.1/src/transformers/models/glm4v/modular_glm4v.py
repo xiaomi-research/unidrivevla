@@ -477,7 +477,7 @@ class Glm4vVisionEmbeddings(nn.Module):
             # Convert inputs to tensors if needed
             if isinstance(lengths, list):
                 lengths = torch.tensor(lengths, device=device, dtype=torch.long)
-            if not isinstance(image_shapes, "torch.Tensor"):
+            if not isinstance(image_shapes, torch.Tensor):
                 image_shapes = torch.tensor(image_shapes, device=device, dtype=torch.long)
 
             # Prepare 2D position embedding

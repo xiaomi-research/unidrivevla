@@ -890,7 +890,7 @@ class FalconModel(FalconPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length
             )
 

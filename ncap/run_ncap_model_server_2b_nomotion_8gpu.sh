@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Eight-GPU NCAP model-server launcher. MODEL_KEY is only a run label; the
+# model/config/checkpoint are supplied by the caller and are never fixed here.
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+RELEASE_ROOT="${RELEASE_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+MODEL_KEY="${MODEL_KEY:-custom}"
+ADAPTER_ROOT="${ADAPTER_ROOT:-${RELEASE_ROOT}/ncap}"
+MODEL_ROOT="${MODEL_ROOT:-${RELEASE_ROOT}}"
+REPO_ROOT="${REPO_ROOT:-${RELEASE_ROOT}}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+NUM_SERVERS="${NUM_SERVERS:-8}"
+GPU_IDS="${GPU_IDS:-0,1,2,3,4,5,6,7}"
+BASE_PORT="${BASE_PORT:-9000}"
+
+MULTI_RUNNER="${MULTI_RUNNER:-${RELEASE_ROOT}/ncap/run_ncap_model_server_iter17580_multi8.sh}"
+CONFIG="${CONFIG:?Set CONFIG to the UniDriveVLA config for the model being evaluated}"
+CHECKPOINT="${CHECKPOINT:?Set CHECKPOINT to the UniDriveVLA checkpoint for the model being evaluated}"
+LOG_DIR="${LOG_DIR:-${RELEASE_ROOT}/ncap_logs/${MODEL_KEY}}"
+MMCV_ROOT="${MMCV_ROOT:-${MODEL_ROOT}/third_party/mmcv-1.7.2}"
+MMDET3D_ROOT="${MMDET3D_ROOT:-${MODEL_ROOT}/third_party/mmdetection3d-1.0.0rc6}"
+UNIDRIVE_WASP_SVD_CACHE_DIR="${UNIDRIVE_WASP_SVD_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/unidrivevla/wasp_svd}"
+NUSCENES_ROOT="${NUSCENES_ROOT:-${MODEL_ROOT}/nuScenes}"
+DATA_INFOS_ROOT="${DATA_INFOS_ROOT:-${NUSCENES_ROOT}/data/infos}"
+NUSCENES_DATA_ROOT="${NUSCENES_DATA_ROOT:-${NUSCENES_ROOT}/data/nuscenes}"
+NUSCENES_ANCHOR_ROOT="${NUSCENES_ANCHOR_ROOT:-${NUSCENES_ROOT}/data/kmeans}"
+VLM_PRETRAINED_PATH="${VLM_PRETRAINED_PATH:?Set VLM_PRETRAINED_PATH to the base HF model directory}"
+OCCWORLD_VAE_PATH="${OCCWORLD_VAE_PATH:?Set OCCWORLD_VAE_PATH to the OccWorld VAE checkpoint}"
+COC_JSONL_PATH="${COC_JSONL_PATH:-${NUSCENES_DATA_ROOT}/alpamayo_coc_val_with_nav.jsonl}"
+COC_ENABLED="${COC_ENABLED:-1}"
+
+for required_path in "${MULTI_RUNNER}" "${CONFIG}" "${CHECKPOINT}" "${VLM_PRETRAINED_PATH}/config.json" "${OCCWORLD_VAE_PATH}" "${DATA_INFOS_ROOT}" "${NUSCENES_DATA_ROOT}" "${NUSCENES_ANCHOR_ROOT}"; do
+  if [[ ! -e "${required_path}" ]]; then
+    echo "Required NCAP model input not found: ${required_path}" >&2
+    exit 1
+  fi
+done
+
+echo "Launching ${MODEL_KEY}: ${CONFIG}"
+echo "Checkpoint: ${CHECKPOINT}"
+echo "${NUM_SERVERS} model replicas on GPUs ${GPU_IDS}, ports ${BASE_PORT}-$((BASE_PORT + NUM_SERVERS - 1))"
+
+export ADAPTER_ROOT MODEL_ROOT REPO_ROOT CONFIG CHECKPOINT PYTHON_BIN LOG_DIR
+export MMCV_ROOT MMDET3D_ROOT UNIDRIVE_WASP_SVD_CACHE_DIR
+export NUSCENES_ROOT DATA_INFOS_ROOT NUSCENES_DATA_ROOT NUSCENES_ANCHOR_ROOT COC_JSONL_PATH
+export VLM_PRETRAINED_PATH OCCWORLD_VAE_PATH NUM_SERVERS GPU_IDS BASE_PORT MODEL_KEY
+if [[ "${COC_ENABLED}" == "1" ]]; then
+  export ENABLE_COC=1 ENABLE_COC_GENERATE=1 ENABLE_COC_LANGUAGE_OUTPUT=1
+  export COC_EVAL_SOURCE=pred COC_EVAL_INJECTION=answer
+  export HUGSIM_ENABLE_COC=1 HUGSIM_ENABLE_COC_GENERATE=1
+  export HUGSIM_COC_EVAL_SOURCE=pred HUGSIM_COC_EVAL_INJECTION=answer
+else
+  export ENABLE_COC=0 ENABLE_COC_GENERATE=0 ENABLE_COC_LANGUAGE_OUTPUT=0
+  export COC_EVAL_SOURCE=none COC_EVAL_INJECTION=none
+  export HUGSIM_ENABLE_COC=0 HUGSIM_ENABLE_COC_GENERATE=0
+  export HUGSIM_COC_EVAL_SOURCE=none HUGSIM_COC_EVAL_INJECTION=none
+fi
+export HUGSIM_USE_GT_EGO_STATUS="${HUGSIM_USE_GT_EGO_STATUS:-1}"
+export HUGSIM_CHECKPOINT_MIN_PARAMETER_COVERAGE="${HUGSIM_CHECKPOINT_MIN_PARAMETER_COVERAGE:-0.99}"
+
+exec bash "${MULTI_RUNNER}"

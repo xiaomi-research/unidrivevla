@@ -316,9 +316,9 @@ def torch_stack(tensors, dim=None, axis=None, *, out=None):
 
 
 def torch_add(input, other, *, alpha=1, out=None):
-    if not isinstance(input, "torch.Tensor"):
+    if not isinstance(input, torch.Tensor):
         return torch.empty_like(other, device="meta")
-    if not isinstance(other, "torch.Tensor"):
+    if not isinstance(other, torch.Tensor):
         return torch.empty_like(input, device="meta")
     max_length = max(input.dim(), other.dim())
     input_shape = list(input.shape) + [1] * (max_length - input.dim())
@@ -530,7 +530,7 @@ def torch_tensor_unsqueeze(self, dim):
 
 def torch_unique_consecutive(input, **kwargs):
     output = torch.unique_consecutive(torch.zeros_like(input, device="cpu"), **kwargs)
-    if isinstance(output, "torch.Tensor"):
+    if isinstance(output, torch.Tensor):
         return output.to("meta")
     else:
         return tuple(map(output, lambda x: x.to("meta")))
@@ -577,14 +577,14 @@ def torch_nn_bcewithlogitsloss(self, input, target):
 
 def operator_getitem(a, b):
     def to_concrete(t):
-        if isinstance(t, "torch.Tensor"):
+        if isinstance(t, torch.Tensor):
             concrete = torch.ones_like(t, device="cpu")
             if concrete.dtype in [torch.float16, torch.float32, torch.float64, torch.int32]:
                 concrete = concrete.to(torch.int64)
             return concrete
         return t
 
-    if isinstance(a, "torch.Tensor"):
+    if isinstance(a, torch.Tensor):
         # TODO: infer shape without performing the computation.
         if isinstance(b, tuple):
             b = tuple(map(to_concrete, b))
@@ -1090,7 +1090,7 @@ class HFTracer(Tracer):
             if kind == "call_function":
                 meta_target = _MANUAL_META_OVERRIDES.get(target, target)
                 meta_out = meta_target(*args_metas, **kwargs_metas)
-                if isinstance(meta_out, "torch.Tensor"):
+                if isinstance(meta_out, torch.Tensor):
                     meta_out = meta_out.to(device="meta")
             elif kind == "call_method":
                 method = getattr(args_metas[0].__class__, target)
@@ -1110,7 +1110,7 @@ class HFTracer(Tracer):
                 atoms = target.split(".")
                 for atom in atoms:
                     attr_itr = getattr(attr_itr, atom)
-                if isinstance(attr_itr, "torch.Tensor"):
+                if isinstance(attr_itr, torch.Tensor):
                     meta_out = attr_itr.to(device="meta")
                 else:
                     meta_out = attr_itr
@@ -1160,7 +1160,7 @@ class HFTracer(Tracer):
                 if maybe_parameter_proxy is not None:
                     return maybe_parameter_proxy
 
-            if self.proxy_buffer_attributes and isinstance(attr_val, "torch.Tensor"):
+            if self.proxy_buffer_attributes and isinstance(attr_val, torch.Tensor):
                 maybe_buffer_proxy = maybe_get_proxy_for_attr(
                     attr_val, self.root.named_buffers(), parameter_proxy_cache
                 )
@@ -1298,7 +1298,7 @@ class HFTracer(Tracer):
                 )
 
         def to_meta(value):
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 return value.to("meta")
             return value
 

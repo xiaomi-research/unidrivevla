@@ -2149,7 +2149,7 @@ class Trainer:
                     from .modeling_outputs import CausalLMOutputWithPast
 
                     real_output = None
-                    if isinstance(output, "torch.Tensor"):
+                    if isinstance(output, torch.Tensor):
                         real_output = output
                     elif isinstance(output, tuple):
                         real_output = output[0]
@@ -3204,7 +3204,7 @@ class Trainer:
 
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             if grad_norm is not None:
-                logs["grad_norm"] = grad_norm.item() if isinstance(grad_norm, "torch.Tensor") else grad_norm
+                logs["grad_norm"] = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
             if learning_rate is not None:
                 logs["learning_rate"] = learning_rate
             else:
@@ -3800,7 +3800,7 @@ class Trainer:
             return type(data)({k: self._prepare_input(v) for k, v in data.items()})
         elif isinstance(data, (tuple, list)):
             return type(data)(self._prepare_input(v) for v in data)
-        elif isinstance(data, "torch.Tensor"):
+        elif isinstance(data, torch.Tensor):
             kwargs = {"device": self.args.device}
             if self.is_deepspeed_enabled and (torch.is_floating_point(data) or torch.is_complex(data)):
                 # NLP models inputs are int/uint and those get adjusted to the right dtype of the
@@ -3864,7 +3864,7 @@ class Trainer:
             # For causal masks, upper triangular should be 0 or very negative (like -inf)
             # Use a reasonable threshold to handle float precision issues
             is_causal = torch.all(upper_triangular <= 1e-6) or torch.all(upper_triangular < -1e4)
-            return is_causal.item() if isinstance(is_causal, "torch.Tensor") else is_causal
+            return is_causal.item() if isinstance(is_causal, torch.Tensor) else is_causal
 
         # For unknown dimensions, be conservative and reject
         return False

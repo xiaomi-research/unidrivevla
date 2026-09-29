@@ -749,7 +749,7 @@ class Florence2PostProcessor:
             raise ValueError("Exactly one of 'text' or 'sequence' must be provided.")
 
         if sequence is not None:
-            if isinstance(sequence, "torch.Tensor"):
+            if isinstance(sequence, torch.Tensor):
                 sequence = sequence.tolist()
             sequence = sequence[1:] if sequence[0] == self.tokenizer.bos_token_id else sequence  # Skip BOS if present
             text, _ = self.decode_with_spans(sequence)

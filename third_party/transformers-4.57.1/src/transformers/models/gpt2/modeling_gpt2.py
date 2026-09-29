@@ -917,7 +917,7 @@ class GPT2Model(GPT2PreTrainedModel):
             # Model parallel
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
-                if isinstance(head_mask, "torch.Tensor"):
+                if isinstance(head_mask, torch.Tensor):
                     head_mask = head_mask.to(hidden_states.device)
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)

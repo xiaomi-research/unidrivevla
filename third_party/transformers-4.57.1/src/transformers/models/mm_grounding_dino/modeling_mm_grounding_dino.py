@@ -1861,7 +1861,7 @@ class MMGroundingDinoModel(MMGroundingDinoPreTrainedModel):
         self.encoder = MMGroundingDinoEncoder(config)
         self.decoder = MMGroundingDinoDecoder(config)
 
-        self.level_embed = nn.Parameter("torch.Tensor"(config.num_feature_levels, config.d_model))
+        self.level_embed = nn.Parameter(torch.Tensor(config.num_feature_levels, config.d_model))
 
         self.enc_output = nn.Linear(config.d_model, config.d_model)
         self.enc_output_norm = nn.LayerNorm(config.d_model, config.layer_norm_eps)

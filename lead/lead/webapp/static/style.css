@@ -1,0 +1,159 @@
+/* LEAD Infraction Dashboard - Bootstrap Enhanced Styles */
+
+:root {
+    --bs-primary: #f97316;
+    --bs-primary-rgb: 249, 115, 22;
+}
+
+body {
+    background: #fff9ef;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Warm navbar */
+.bg-warm {
+    background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%) !important;
+    border-bottom: 3px solid #f97316;
+}
+
+.navbar-brand {
+    color: #292524 !important;
+    font-weight: 600;
+}
+
+/* Sidebar */
+.sidebar-height {
+    height: calc(100vh - 72px);
+    overflow-y: auto;
+    background: #fffbf5 !important;
+}
+
+/* Main content area */
+.main-content-area {
+    height: calc(100vh - 72px);
+    overflow-y: auto;
+    background: #fff9ef;
+}
+
+/* Route cards */
+.route-card {
+    transition: all 0.2s;
+    border: 1px solid #fed7aa !important;
+    background: white !important;
+}
+
+.route-card:hover {
+    background: #ffedd5 !important;
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.15) !important;
+    transform: translateX(4px);
+}
+
+/* Read-only mode - hide file operations */
+.read-only-hide {
+    display: none !important;
+}
+
+.route-card.selected {
+    background: #e3f2fd !important;
+    border-left: 4px solid #1976d2 !important;
+    box-shadow: 0 2px 8px rgba(25, 118, 210, 0.2) !important;
+}
+
+/* Infraction items */
+.infraction-item {
+    transition: all 0.2s;
+    background: white;
+}
+
+.infraction-item:hover {
+    background: #fff7ed !important;
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.1);
+    transform: translateX(4px);
+}
+
+.infraction-item.clicked-infraction {
+    background: #fff3cd !important;
+    box-shadow: 0 2px 8px rgba(255, 193, 7, 0.3) !important;
+}
+
+.infraction-item.nearest-infraction {
+    background: #e7f3ff !important;
+    box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2) !important;
+}
+
+/* Cards */
+.card {
+    border: 1px solid #fed7aa !important;
+    background: white !important;
+}
+
+.card-header {
+    background: #fffbf5 !important;
+    border-bottom: 1px solid #fed7aa !important;
+}
+
+.card-footer {
+    background: #fffbf5 !important;
+    border-top: 1px solid #fed7aa !important;
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: #f97316 !important;
+    border-color: #f97316 !important;
+}
+
+.btn-primary:hover {
+    background-color: #ea580c !important;
+    border-color: #ea580c !important;
+}
+
+.btn-outline-primary {
+    color: #f97316 !important;
+    border-color: #f97316 !important;
+}
+
+.btn-outline-primary:hover {
+    background-color: #f97316 !important;
+    border-color: #f97316 !important;
+    color: white !important;
+}
+
+/* Badges */
+.badge.bg-primary {
+    background-color: #f97316 !important;
+}
+
+.text-primary {
+    color: #f97316 !important;
+}
+
+/* Forms */
+.form-control:focus {
+    border-color: #f97316;
+    box-shadow: 0 0 0 0.2rem rgba(249, 115, 22, 0.25);
+}
+
+.form-select:focus {
+    border-color: #f97316;
+    box-shadow: 0 0 0 0.2rem rgba(249, 115, 22, 0.25);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #fff7ed;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #fed7aa;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #fdba74;
+}

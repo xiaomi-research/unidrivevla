@@ -83,8 +83,8 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
 
 | Method | Backbone | L2@1s ↓ | L2@2s ↓ | L2@3s ↓ | Avg. L2 ↓ | Col@1s ↓ | Col@2s ↓ | Col@3s ↓ | Avg. Col ↓ | Config | Weights |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| UniDriveVLA-Base | Qwen3-VL-2B | 0.28 | 0.51 | 0.82 | 0.54 | 0.08 | 0.13 | 0.31 | 0.17 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_stage2_2b.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage3) |
-| UniDriveVLA-Large | Qwen3-VL-8B | 0.27 | 0.49 | 0.77 | 0.51 | 0.03 | 0.10 | 0.21 | 0.11 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_stage2_8b.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage3) |
+| UniDriveVLA-Base | Qwen3-VL-2B | 0.28 | 0.51 | 0.82 | 0.54 | 0.08 | 0.13 | 0.31 | 0.17 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_nusc_2b_stage2.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Base_Stage3) |
+| UniDriveVLA-Large | Qwen3-VL-8B | 0.27 | 0.49 | 0.77 | 0.51 | 0.03 | 0.10 | 0.21 | 0.11 | [config](nuScenes/projects/configs/UniDriveVLA/unidrivevla_nusc_8b_stage2.py) | [HuggingFace](https://huggingface.co/owl10/UniDriveVLA_Nusc_Large_Stage3) |
 
 > Bench2Drive Closed-Loop Results
 

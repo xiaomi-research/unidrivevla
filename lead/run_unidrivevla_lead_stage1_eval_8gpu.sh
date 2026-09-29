@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Single-node 8-GPU LEAD official closed-loop evaluation for the UniDriveVLA
+# LEAD Stage1 checkpoint. This uses LEAD routes + LEAD agent, not B2D eval.
+#
+# Default runs all Town13 routes with up to 8 local route jobs. Override
+# EVALUATION_DATASET/ROUTE_IDS/ROUTE_LIMIT to run another LEAD split or subset.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LEAD_PROJECT_ROOT=${LEAD_PROJECT_ROOT:-$SCRIPT_DIR}
+PROJECT_DIR=${PROJECT_DIR:-$LEAD_PROJECT_ROOT/Bench2Drive}
+
+CONFIG=${CONFIG:-${PROJECT_DIR}/projects/configs/unidrivevla_lead_stage1_unified_2b.py}
+CHECKPOINT=${CHECKPOINT:-}
+SAVE_NAME=${SAVE_NAME:-lead_stage1}
+
+if [[ -z "${CHECKPOINT}" ]]; then
+    echo "CHECKPOINT is required; refusing to reuse the legacy 2Hz/6-step Stage1 checkpoint." >&2
+    exit 1
+fi
+if [[ ! -f "${CONFIG}" || ! -f "${CHECKPOINT}" ]]; then
+    echo "Missing Stage1 config or checkpoint: CONFIG=${CONFIG} CHECKPOINT=${CHECKPOINT}" >&2
+    exit 1
+fi
+
+# LEAD official route set. Defaults to full Town13; for a quick 8-route smoke
+# test, run with ROUTE_IDS="0 1 2 3 4 5 6 7".
+EVALUATION_DATASET=${EVALUATION_DATASET:-Town13}
+EXPERIMENT_RUN_ID=${EXPERIMENT_RUN_ID:-${SAVE_NAME}_${EVALUATION_DATASET}_8gpu}
+
+# Use the same CARLA installation as the working B2D scripts, but keep LEAD's
+# evaluator/agent/routes.
+CARLA_ROOT=${CARLA_ROOT:?Set CARLA_ROOT to the external CARLA installation}
+
+CARLA_RUN_UID=${CARLA_RUN_UID:-1001}
+CARLA_RUN_GID=${CARLA_RUN_GID:-1001}
+SETPRIV_BIN=${SETPRIV_BIN:-}
+CARLA_NONROOT_HOME=${CARLA_NONROOT_HOME:-/tmp/carla-home-${CARLA_RUN_UID}}
+if [[ -z "${SETPRIV_BIN}" ]]; then
+    for candidate in /usr/bin/setpriv /bin/setpriv "$(command -v setpriv 2>/dev/null || true)"; do
+        if [[ -n "${candidate}" && -x "${candidate}" ]]; then
+            SETPRIV_BIN="${candidate}"
+            break
+        fi
+    done
+fi
+mkdir -p "${CARLA_NONROOT_HOME}"
+chown "${CARLA_RUN_UID}:${CARLA_RUN_GID}" "${CARLA_NONROOT_HOME}" || true
+
+export LEAD_PROJECT_ROOT
+export PROJECT_DIR
+export CONFIG
+export CHECKPOINT
+export SAVE_NAME
+export EVALUATION_DATASET
+export EXPERIMENT_RUN_ID
+export CARLA_ROOT
+
+if [[ -n "${ROUTE_IDS:-}" ]]; then
+    export ROUTE_IDS
+fi
+if [[ -n "${ROUTE_LIMIT:-}" ]]; then
+    export ROUTE_LIMIT
+fi
+
+export LOCAL_GPUS_PER_NODE=${LOCAL_GPUS_PER_NODE:-8}
+export LEAD_LOCAL_MAX_PARALLEL_JOBS=${LEAD_LOCAL_MAX_PARALLEL_JOBS:-8}
+export RUN_EVAL=${RUN_EVAL:-1}
+export LEAD_RESUME_SKIP_FINISHED=${LEAD_RESUME_SKIP_FINISHED:-1}
+export CLEAN_EXISTING_CARLA=${CLEAN_EXISTING_CARLA:-0}
+export ROUTE_STARTUP_STAGGER=${ROUTE_STARTUP_STAGGER:-60}
+export CARLA_STARTUP_SLEEP=${CARLA_STARTUP_SLEEP:-60}
+export LEADERBOARD_TIMEOUT=${LEADERBOARD_TIMEOUT:-600}
+export VULKAN_PREFLIGHT=${VULKAN_PREFLIGHT:-0}
+export UNIDRIVEVLA_LEAD_DELTA_STATS=${UNIDRIVEVLA_LEAD_DELTA_STATS:-config}
+export UNIDRIVEVLA_LEAD_PLAN_COORD=${UNIDRIVEVLA_LEAD_PLAN_COORD:-lead_forward_lateral}
+export UNIDRIVEVLA_LEAD_CONTROL=${UNIDRIVEVLA_LEAD_CONTROL:-tfv6_route_speed}
+export UNIDRIVEVLA_LEAD_JPEG_QUALITY=${UNIDRIVEVLA_LEAD_JPEG_QUALITY:-auto}
+export UNIDRIVEVLA_LEAD_WAYPOINT_HZ=${UNIDRIVEVLA_LEAD_WAYPOINT_HZ:-auto}
+export UNIDRIVEVLA_LEAD_COMMAND_SOURCE=${UNIDRIVEVLA_LEAD_COMMAND_SOURCE:-current}
+export UNIDRIVEVLA_LEAD_ROUTE_PLANNER=${UNIDRIVEVLA_LEAD_ROUTE_PLANNER:-lead}
+export UNIDRIVEVLA_LEAD_ROUTE_POP_DISTANCE=${UNIDRIVEVLA_LEAD_ROUTE_POP_DISTANCE:-5.0}
+export UNIDRIVEVLA_LEAD_ROUTE_ADAPTIVE_POP=${UNIDRIVEVLA_LEAD_ROUTE_ADAPTIVE_POP:-1}
+export UNIDRIVEVLA_LEAD_TEMPORAL_MODE=${UNIDRIVEVLA_LEAD_TEMPORAL_MODE:-close_loop}
+export PORT_BASE=${PORT_BASE:-20000}
+export TM_PORT_BASE=${TM_PORT_BASE:-30000}
+export PORT_STRIDE=${PORT_STRIDE:-10}
+
+if [[ -n "${SETPRIV_BIN}" ]]; then
+    export USE_B2D_NONROOT_CARLA=${USE_B2D_NONROOT_CARLA:-1}
+else
+    echo "Warning: setpriv not found; falling back to root CARLA launch." >&2
+    export USE_B2D_NONROOT_CARLA=${USE_B2D_NONROOT_CARLA:-0}
+fi
+export CARLA_RUN_UID
+export CARLA_RUN_GID
+if [[ -n "${SETPRIV_BIN}" ]]; then
+    export SETPRIV_BIN
+fi
+
+# Empty these so run_unidrivevla_lead_eval_8gpu.sh does not inject Vulkan/XDG
+# settings that are unstable on some cloud images.
+export CARLA_VK_ICD=${CARLA_VK_ICD:-}
+export CARLA_XDG_RUNTIME_DIR=${CARLA_XDG_RUNTIME_DIR:-}
+export HOME="${CARLA_NONROOT_HOME}"
+
+echo "LEAD official 8-GPU eval"
+echo "PROJECT_DIR=${PROJECT_DIR}"
+echo "CONFIG=${CONFIG}"
+echo "CHECKPOINT=${CHECKPOINT}"
+echo "EVALUATION_DATASET=${EVALUATION_DATASET}"
+echo "ROUTE_IDS=${ROUTE_IDS:-}"
+echo "ROUTE_LIMIT=${ROUTE_LIMIT:-}"
+echo "EXPERIMENT_RUN_ID=${EXPERIMENT_RUN_ID}"
+echo "CARLA_ROOT=${CARLA_ROOT}"
+echo "LOCAL_GPUS_PER_NODE=${LOCAL_GPUS_PER_NODE}"
+echo "LEAD_LOCAL_MAX_PARALLEL_JOBS=${LEAD_LOCAL_MAX_PARALLEL_JOBS}"
+echo "ROUTE_STARTUP_STAGGER=${ROUTE_STARTUP_STAGGER}"
+echo "LEAD_RESUME_SKIP_FINISHED=${LEAD_RESUME_SKIP_FINISHED}"
+echo "UNIDRIVEVLA_LEAD_DELTA_STATS=${UNIDRIVEVLA_LEAD_DELTA_STATS}"
+echo "UNIDRIVEVLA_LEAD_PLAN_COORD=${UNIDRIVEVLA_LEAD_PLAN_COORD}"
+echo "UNIDRIVEVLA_LEAD_CONTROL=${UNIDRIVEVLA_LEAD_CONTROL}"
+echo "UNIDRIVEVLA_LEAD_JPEG_QUALITY=${UNIDRIVEVLA_LEAD_JPEG_QUALITY}"
+echo "UNIDRIVEVLA_LEAD_WAYPOINT_HZ=${UNIDRIVEVLA_LEAD_WAYPOINT_HZ}"
+echo "UNIDRIVEVLA_LEAD_COMMAND_SOURCE=${UNIDRIVEVLA_LEAD_COMMAND_SOURCE}"
+echo "UNIDRIVEVLA_LEAD_ROUTE_PLANNER=${UNIDRIVEVLA_LEAD_ROUTE_PLANNER}"
+echo "UNIDRIVEVLA_LEAD_ROUTE_POP_DISTANCE=${UNIDRIVEVLA_LEAD_ROUTE_POP_DISTANCE}"
+echo "UNIDRIVEVLA_LEAD_ROUTE_ADAPTIVE_POP=${UNIDRIVEVLA_LEAD_ROUTE_ADAPTIVE_POP}"
+echo "UNIDRIVEVLA_LEAD_TEMPORAL_MODE=${UNIDRIVEVLA_LEAD_TEMPORAL_MODE}"
+echo "CARLA_RUN_UID:GID=${CARLA_RUN_UID}:${CARLA_RUN_GID}"
+echo "SETPRIV_BIN=${SETPRIV_BIN:-<not found>}"
+echo "USE_B2D_NONROOT_CARLA=${USE_B2D_NONROOT_CARLA}"
+echo "CARLA_NONROOT_HOME=${CARLA_NONROOT_HOME}"
+
+cd "${LEAD_PROJECT_ROOT}"
+bash run_unidrivevla_lead_eval_8gpu.sh

@@ -36,6 +36,22 @@ from projects.mmdet3d_plugin.core.box3d import *
 __all__ = ["UnifiedPerceptionDecoder"]
 
 
+@POSITIONAL_ENCODING.register_module()
+class MotionAnchorSineEncoder(BaseModule):
+    def __init__(self, embed_dims=256, init_cfg=None):
+        super().__init__(init_cfg)
+        self.encoder = nn.Sequential(
+            *linear_relu_ln(embed_dims, 1, 1),
+            Linear(embed_dims, embed_dims),
+        )
+
+    def forward(self, sine_embed):
+        target_dtype = next(self.encoder.parameters()).dtype
+        if sine_embed.dtype != target_dtype:
+            sine_embed = sine_embed.to(dtype=target_dtype)
+        return self.encoder(sine_embed)
+
+
 @HEADS.register_module()
 class UnifiedPerceptionDecoder(BaseModule):
 
@@ -199,6 +215,108 @@ class UnifiedPerceptionDecoder(BaseModule):
             self.fc_after = nn.Identity()
 
         self._stage1_cache = {}
+
+    def _track_reuse_enabled(self):
+        # Tracking ID ownership transfer is part of evaluation semantics. It is
+        # enabled whenever instance IDs are requested and never affects training.
+        return bool(self.with_instance_id and not self.training)
+
+    def _track_reuse_strict(self):
+        # Duplicate IDs make a tracking result invalid, so evaluation must fail
+        # loudly instead of silently falling back to the unfixed output.
+        return True
+
+    def _det_output_mask(self, score):
+        """Return the query membership used by SparseBox3DDecoder.decode."""
+        num_output = min(int(self.det_decoder.num_output), score.shape[1])
+        output_mask = torch.zeros_like(score, dtype=torch.bool)
+        if num_output <= 0:
+            return output_mask
+        output_idx = score.topk(num_output, dim=1, sorted=False).indices
+        output_mask.scatter_(1, output_idx, True)
+        if self.det_decoder.score_threshold is not None:
+            output_mask &= score >= float(self.det_decoder.score_threshold)
+        return output_mask
+
+    def _reuse_temporal_instance_ids(self, det_cls, det_anchor, instance_id):
+        if not self._track_reuse_enabled():
+            return instance_id
+        if self.training or det_cls is None or det_anchor is None or instance_id is None:
+            return instance_id
+        if not hasattr(self, "det_instance_bank"):
+            return instance_id
+
+        temp_n = min(getattr(self.det_instance_bank, "num_temp_instances", 0), det_cls.shape[1])
+        if temp_n <= 0 or temp_n >= det_cls.shape[1]:
+            return instance_id
+
+        try:
+            score, label = det_cls.detach().float().sigmoid().max(dim=-1)
+            anchor_xy = det_anchor.detach().float()[..., :2]
+            output_mask = self._det_output_mask(score)
+            fresh_score_thr = 0.2
+            temp_min_score = 0.01
+            dist_thr = 2.5
+
+            reused = instance_id.clone()
+            total_reused = 0
+            for b in range(reused.shape[0]):
+                temporal_ids = reused[b, :temp_n]
+                temporal_valid = temporal_ids >= 0
+                temporal_valid = temporal_valid & (score[b, :temp_n] >= temp_min_score)
+                # Transfer ID ownership only from a query that is not emitted in
+                # this frame. This keeps IDs unique in the tracking submission.
+                temporal_valid = temporal_valid & ~output_mask[b, :temp_n]
+
+                fresh_valid = reused[b, temp_n:] >= 0
+                fresh_valid = fresh_valid & (score[b, temp_n:] >= fresh_score_thr)
+                fresh_valid = fresh_valid & output_mask[b, temp_n:]
+                if not temporal_valid.any() or not fresh_valid.any():
+                    continue
+
+                temporal_idx = torch.where(temporal_valid)[0]
+                fresh_idx = torch.where(fresh_valid)[0] + temp_n
+                dist = torch.cdist(anchor_xy[b, fresh_idx], anchor_xy[b, temporal_idx])
+                class_match = label[b, fresh_idx, None] == label[b, temporal_idx][None]
+                dist = torch.where(class_match, dist, dist.new_full(dist.shape, float("inf")))
+                order = torch.argsort(score[b, fresh_idx], descending=True)
+                for rel_fresh in order.tolist():
+                    best_dist, rel_temporal = dist[rel_fresh].min(dim=0)
+                    if not torch.isfinite(best_dist) or float(best_dist) > dist_thr:
+                        continue
+                    rel_temporal_int = int(rel_temporal)
+                    source_idx = temporal_idx[rel_temporal_int]
+                    reused[b, fresh_idx[rel_fresh]] = temporal_ids[source_idx]
+                    # Move, rather than copy, the old ID. Keeping it on both
+                    # slots would duplicate the ID in the next temporal cache.
+                    reused[b, source_idx] = -1
+                    dist[:, rel_temporal_int] = float("inf")
+                    total_reused += 1
+
+                output_ids = reused[b, output_mask[b]]
+                output_ids = output_ids[output_ids >= 0]
+                if output_ids.unique().numel() != output_ids.numel():
+                    raise RuntimeError("duplicate tracking IDs in decoder output queries")
+
+            if total_reused > 0:
+                self.det_instance_bank.update_instance_id(reused, score)
+
+            self._track_reuse_calls = getattr(self, "_track_reuse_calls", 0) + 1
+            self._track_reuse_total = getattr(self, "_track_reuse_total", 0) + total_reused
+            log_interval = 500
+            if log_interval > 0 and self._track_reuse_calls % log_interval == 0:
+                print(
+                    "[UniDriveVLA] track id reuse: "
+                    f"calls={self._track_reuse_calls}, reused={self._track_reuse_total}, "
+                    "duplicate_output_ids=0",
+                    flush=True,
+                )
+            return reused
+        except Exception as exc:
+            if self._track_reuse_strict():
+                raise
+            print(f"[UniDriveVLA] track id reuse disabled after error: {exc}", flush=True)
+            return instance_id
 
     def _get_num_anchor_cumsum(self, det_n, map_n, ego_n):
         return np.cumsum([0, det_n, map_n, ego_n]).tolist()
@@ -1197,7 +1315,15 @@ class UnifiedPerceptionDecoder(BaseModule):
                             det_pred_list[-1],
                             self.det_decoder.score_threshold
                         )
+                        instance_id = self._reuse_temporal_instance_ids(
+                            det_cls_list[-1],
+                            det_pred_list[-1],
+                            instance_id
+                        )
                     except Exception as e:
+                        if self._track_reuse_strict():
+                            raise
+                        print(f"[UniDriveVLA] instance ID generation failed: {e}", flush=True)
                         instance_id = None
 
                 det_result = self.det_decoder.decode(

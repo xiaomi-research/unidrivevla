@@ -157,7 +157,7 @@ class ImageGPTImageProcessorFast(BaseImageProcessorFast):
                 raise ValueError("Clusters must be provided for color quantization.")
             # Convert to torch tensor if needed (clusters might be passed as list/numpy)
             clusters_torch = (
-                torch.as_tensor(clusters, dtype=torch.float32) if not isinstance(clusters, "torch.Tensor") else clusters
+                torch.as_tensor(clusters, dtype=torch.float32) if not isinstance(clusters, torch.Tensor) else clusters
             ).to(pixel_values[0].device, dtype=pixel_values[0].dtype)
 
             # Group images by shape for batch processing
@@ -189,7 +189,7 @@ class ImageGPTImageProcessorFast(BaseImageProcessorFast):
     def to_dict(self):
         # Convert torch tensors to lists for JSON serialization
         output = super().to_dict()
-        if output.get("clusters") is not None and isinstance(output["clusters"], "torch.Tensor"):
+        if output.get("clusters") is not None and isinstance(output["clusters"], torch.Tensor):
             output["clusters"] = output["clusters"].tolist()
 
         return output

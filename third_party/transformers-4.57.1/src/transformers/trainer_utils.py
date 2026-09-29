@@ -777,7 +777,7 @@ def denumpify_detensorize(metrics):
         return type(metrics)({k: denumpify_detensorize(v) for k, v in metrics.items()})
     elif isinstance(metrics, np.generic):
         return metrics.item()
-    elif is_torch_available() and isinstance(metrics, "torch.Tensor") and metrics.numel() == 1:
+    elif is_torch_available() and isinstance(metrics, torch.Tensor) and metrics.numel() == 1:
         return metrics.item()
     return metrics
 

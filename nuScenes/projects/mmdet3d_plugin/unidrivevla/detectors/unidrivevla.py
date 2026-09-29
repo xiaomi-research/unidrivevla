@@ -94,6 +94,8 @@ class UniDriveVLA(BaseDetector):
         gt_ego_fut_masks=None,
         gt_ego_fut_cmd=None,
         ego_status=None,
+        gt_ego_lcf_feat=None,
+        gt_ego_his_trajs=None,
         gt_occ_dense=None,
         hist_traj=None,
         ar_batch=None,  # AR Cotraining: JSONL data batch
@@ -133,6 +135,8 @@ class UniDriveVLA(BaseDetector):
             gt_ego_fut_masks=gt_ego_fut_masks,
             gt_ego_fut_cmd=gt_ego_fut_cmd,
             ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
             gt_occ_dense=gt_occ_dense,
             hist_traj=hist_traj,
             ar_batch=ar_batch,  # Pass AR batch to planning head
@@ -168,6 +172,8 @@ class UniDriveVLA(BaseDetector):
         gt_ego_fut_masks=None,
         gt_ego_fut_cmd=None,
         ego_status=None,
+        gt_ego_lcf_feat=None,
+        gt_ego_his_trajs=None,
         gt_occ_dense=None,
         hist_traj=None,
         **kwargs,
@@ -196,12 +202,15 @@ class UniDriveVLA(BaseDetector):
             gt_ego_fut_masks=gt_ego_fut_masks,
             gt_ego_fut_cmd=gt_ego_fut_cmd,
             ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
             hist_traj=hist_traj,
             **kwargs,
         )
 
         if isinstance(pred, dict) and ("det" in pred or "map" in pred):
             traj = pred.get("planning", pred.get("traj"))
+            ego_status_pred = pred.get("ego_status_pred")
 
             det_list = pred.get("det")
             map_list = pred.get("map")
@@ -235,6 +244,21 @@ class UniDriveVLA(BaseDetector):
                     img_bbox["final_planning"] = traj.detach().cpu()[i]
                 elif traj is not None:
                     img_bbox["final_planning"] = traj
+                if torch.is_tensor(ego_status_pred):
+                    if ego_status_pred.dim() == 2 and i < ego_status_pred.shape[0]:
+                        img_bbox["ego_status_pred"] = ego_status_pred.detach().cpu()[i]
+                    elif ego_status_pred.dim() == 1:
+                        img_bbox["ego_status_pred"] = ego_status_pred.detach().cpu()
+
+                for key in ("coc_pred_text", "coc_gt_text", "coc_sample_tokens"):
+                    value = pred.get(key)
+                    if isinstance(value, (list, tuple)):
+                        if i < len(value):
+                            out_key = "sample_token" if key == "coc_sample_tokens" else key
+                            img_bbox[out_key] = value[i]
+                    elif value is not None:
+                        out_key = "sample_token" if key == "coc_sample_tokens" else key
+                        img_bbox[out_key] = value
 
                 outputs.append({"img_bbox": img_bbox})
 

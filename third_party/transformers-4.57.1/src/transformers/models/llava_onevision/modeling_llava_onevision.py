@@ -171,7 +171,7 @@ def get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size):
 
     # ! VERY IMPORTANT if image_size is tensor, must convert to into tuple, otherwise it will cause wrong calculate
     if not isinstance(image_size, (list, tuple)):
-        if not isinstance(image_size, ("torch.Tensor", np.ndarray)):
+        if not isinstance(image_size, (torch.Tensor, np.ndarray)):
             raise TypeError(
                 f"image_size invalid type: {type(image_size)} not valid, should be either list, tuple, np.ndarray or tensor"
             )
@@ -202,7 +202,7 @@ def image_size_to_num_patches(image_size, grid_pinpoints, patch_size: int):
 
     # ! VERY IMPORTANT if image_size is tensor, must convert to into tuple, otherwise it will cause wrong calculate
     if not isinstance(image_size, (list, tuple)):
-        if not isinstance(image_size, ("torch.Tensor", np.ndarray)):
+        if not isinstance(image_size, (torch.Tensor, np.ndarray)):
             raise TypeError(f"image_size invalid type {type(image_size)} with value {image_size}")
         image_size = image_size.tolist()
 
@@ -232,7 +232,7 @@ def unpad_image(tensor, original_size):
         `"torch.Tensor"`: The unpadded image tensor.
     """
     if not isinstance(original_size, (list, tuple)):
-        if not isinstance(original_size, ("torch.Tensor", np.ndarray)):
+        if not isinstance(original_size, (torch.Tensor, np.ndarray)):
             raise TypeError(
                 f"image_size invalid type: {type(original_size)} not valid, should be either list, tuple, np.ndarray or tensor"
             )

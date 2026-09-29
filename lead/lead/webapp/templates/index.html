@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infraction Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-warm shadow-sm">
+        <div class="container-fluid">
+            <a href="/" class="navbar-brand mb-0 h1" style="cursor: pointer; text-decoration: none;">
+                <i class="bi bi-speedometer2 text-primary"></i> Infraction Dashboard
+            </a>
+            <div class="d-flex gap-2 flex-grow-1 ms-3">
+                <input type="text" id="output-dir" class="form-control" placeholder="Evaluation output directory..." />
+                <button id="load-routes" class="btn btn-primary">
+                    <i class="bi bi-folder-open"></i> Load Routes
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid px-0">
+        <div class="row g-0">
+            <aside class="col-md-3 bg-light border-end sidebar-height">
+                <div class="p-3">
+                    <!-- Initial state: No directory selected -->
+                    <div id="sidebar-initial" class="text-center py-5">
+                        <i class="bi bi-folder2-open display-4 text-muted mb-3"></i>
+                        <p class="text-muted">Select a directory to view routes</p>
+                    </div>
+
+                    <!-- Active state: Directory selected -->
+                    <div id="sidebar-active" style="display: none;">
+                        <h5 class="fw-bold mb-3">
+                            <i class="bi bi-list-ul text-primary"></i> Routes
+                        </h5>
+                        <div id="route-stats" class="mb-3"></div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="filter-infractions-only" />
+                            <label class="form-check-label" for="filter-infractions-only">
+                                <i class="bi bi-exclamation-triangle text-danger"></i> Show only with infractions
+                            </label>
+                        </div>
+                        <div id="route-list" class="route-list"></div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Main Viewer -->
+            <main class="col-md-9 p-4 main-content-area">
+                <!-- Directory Selection View -->
+                <div id="directory-selection" class="py-4">
+                    <div class="text-center mb-4">
+                        <i class="bi bi-folder2-open display-1 text-primary mb-3"></i>
+                        <h3 class="fw-bold">Select Output Directory</h3>
+                        <p class="text-muted">Choose a directory to view routes and infractions</p>
+                    </div>
+                    <div id="directory-grid" class="row g-3">
+                        <div class="col-12 text-center p-5">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <div class="mt-2 text-muted">Loading directories...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Route Viewer (hidden initially) -->
+                <div id="route-viewer" style="display: none;">
+                    <!-- Route Info Header -->
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h3 id="route-name" class="fw-bold mb-0"></h3>
+                        <div id="route-metrics" class="d-flex gap-2"></div>
+                    </div>
+
+                    <!-- Video Player Card -->
+                    <div class="card mb-4 shadow-sm">
+                        <div class="card-header bg-white">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-auto">
+                                    <select id="video-type" class="form-select">
+                                        <option value="debug">Debug Video</option>
+                                        <option value="demo">Demo Video</option>
+                                        <option value="grid">Grid Video</option>
+                                    </select>
+                                </div>
+                                <div class="col-auto" id="open-directory-btn">
+                                    <button id="open-directory" class="btn btn-sm btn-outline-info" onclick="openVideoDirectory()" title="Open directory in file manager">
+                                        <i class="bi bi-folder2-open"></i> Open Folder
+                                    </button>
+                                </div>
+                                <div class="col-auto">
+                                    <div class="btn-group" role="group">
+                                        <button id="speed-0.5" class="btn btn-sm btn-outline-secondary speed-btn" data-speed="0.5" title="Slow down">0.5x</button>
+                                        <button id="speed-1" class="btn btn-sm btn-outline-secondary speed-btn active" data-speed="1" title="Normal speed">1x</button>
+                                        <button id="speed-2" class="btn btn-sm btn-outline-secondary speed-btn" data-speed="2" title="Speed up">2x</button>
+                                        <button id="speed-3" class="btn btn-sm btn-outline-secondary speed-btn" data-speed="3" title="Fast">3x</button>
+                                        <button id="speed-4" class="btn btn-sm btn-outline-secondary speed-btn" data-speed="4" title="Very fast">4x</button>
+                                        <button id="speed-5" class="btn btn-sm btn-outline-secondary speed-btn" data-speed="5" title="Ultra fast">5x</button>
+                                    </div>
+                                </div>
+                                <div class="col-auto">
+                                    <div class="btn-group" role="group">
+                                        <button id="back-5s" class="btn btn-sm btn-outline-primary" title="Back 5 seconds">
+                                            <i class="bi bi-skip-backward"></i> 5s
+                                        </button>
+                                        <button id="back-1s" class="btn btn-sm btn-outline-primary" title="Back 1 second">
+                                            <i class="bi bi-skip-start"></i> 1s
+                                        </button>
+                                        <button id="forward-1s" class="btn btn-sm btn-outline-primary" title="Forward 1 second">
+                                            1s <i class="bi bi-skip-end"></i>
+                                        </button>
+                                        <button id="forward-5s" class="btn btn-sm btn-outline-primary" title="Forward 5 seconds">
+                                            5s <i class="bi bi-skip-forward"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="col-auto ms-auto">
+                                    <button id="save-timestamp-btn" class="btn btn-sm btn-success" title="Copy URL with current timestamp">
+                                        <i class="bi bi-link-45deg"></i> Save Timestamp
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body p-0">
+                            <video id="video-player" class="w-100" controls style="background: black;">
+                                Your browser does not support the video tag.
+                            </video>
+                        </div>
+                        <div class="card-footer bg-white text-muted small">
+                            <div class="d-flex gap-3 align-items-center justify-content-between">
+                                <div class="d-flex gap-3 align-items-center">
+                                    <div class="d-flex align-items-center gap-1">
+                                        <i class="bi bi-clock"></i>
+                                        <input type="number" id="current-time" class="form-control form-control-sm" style="width: 80px;" step="0.05" min="0" placeholder="0.00" title="Time (seconds)"> s
+                                    </div>
+                                    <div class="d-flex align-items-center gap-1">
+                                        <i class="bi bi-film"></i> Frame:
+                                        <input type="number" id="current-frame" class="form-control form-control-sm" style="width: 70px;" step="1" min="0" placeholder="0" title="Frame number">
+                                    </div>
+                                    <div class="d-flex align-items-center gap-1">
+                                        <i class="bi bi-flag"></i> Step:
+                                        <input type="number" id="current-step" class="form-control form-control-sm" style="width: 70px;" step="1" min="0" placeholder="0" title="Step number">
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-2 align-items-center" id="cut-controls">
+                                    <div class="d-flex align-items-center gap-1">
+                                        <label class="mb-0">Start:</label>
+                                        <input type="text" id="cut-start" class="form-control form-control-sm" style="width: 70px;" value="0:00" placeholder="0:00" title="Start time (m:ss)">
+                                    </div>
+                                    <div class="d-flex align-items-center gap-1">
+                                        <label class="mb-0">Stop:</label>
+                                        <input type="text" id="cut-stop" class="form-control form-control-sm" style="width: 70px;" value="0:00" placeholder="0:00" title="Stop time (m:ss)">
+                                    </div>
+                                    <button id="cut-custom" class="btn btn-sm btn-outline-primary" title="Cut video from start to stop">
+                                        <i class="bi bi-scissors"></i> Cut
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Infractions Card -->
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0 fw-bold">
+                                    <i class="bi bi-exclamation-triangle text-danger"></i> Infractions
+                                    <span id="infraction-count" class="badge bg-danger ms-2">0</span>
+                                </h5>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="jump-offset" id="offset-0" value="0" autocomplete="off">
+                                    <label class="btn btn-outline-secondary" for="offset-0" title="Jump to exact infraction time">0s</label>
+
+                                    <input type="radio" class="btn-check" name="jump-offset" id="offset-1" value="1" autocomplete="off">
+                                    <label class="btn btn-outline-secondary" for="offset-1" title="Jump 1 second before infraction">-1s</label>
+
+                                    <input type="radio" class="btn-check" name="jump-offset" id="offset-3" value="3" checked autocomplete="off">
+                                    <label class="btn btn-outline-secondary" for="offset-3" title="Jump 3 seconds before infraction">-3s</label>
+
+                                    <input type="radio" class="btn-check" name="jump-offset" id="offset-5" value="5" autocomplete="off">
+                                    <label class="btn btn-outline-secondary" for="offset-5" title="Jump 5 seconds before infraction">-5s</label>
+                                </div>
+                            </div>
+                            <div class="input-group mt-2">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="text" id="filter-input" class="form-control" placeholder="Filter by type..." />
+                                <button id="clear-filter" class="btn btn-outline-secondary">Clear</button>
+                            </div>
+                        </div>
+                        <div class="card-body p-0">
+                            <div id="infractions-list" class="infractions-list" style="max-height: 500px; overflow-y: auto;">
+                                <div class="text-center text-muted p-4">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <p class="mt-2">Loading infractions...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Read-only mode (set by server)
+        const READ_ONLY_MODE = {{ 'true' if read_only_mode else 'false' }};
+        console.log('READ_ONLY_MODE:', READ_ONLY_MODE);
+
+        // Global state
+        let currentRoute = null;
+        let currentDirectory = null;
+        let routesData = []; // Store routes data to check video availability
+        let infractions = [];
+        let filteredInfractions = [];
+        let videoFPS = 20; // Default FPS, will be updated from infractions.json
+        let lastClickedInfractionStep = null; // Track the last clicked infraction step
+        let shouldAutoScroll = false; // Flag to control auto-scroll behavior
+        let showInfractionsOnly = false; // Filter to show only routes with infractions
+
+        // Helper function to parse minute:second format to seconds
+        function parseTimeString(timeStr) {
+            const parts = timeStr.split(':');
+            if (parts.length === 1) {
+                // Just seconds
+                return parseFloat(parts[0]) || 0;
+            } else if (parts.length === 2) {
+                // minute:second
+                const minutes = parseInt(parts[0]) || 0;
+                const seconds = parseFloat(parts[1]) || 0;
+                return minutes * 60 + seconds;
+            }
+            return 0;
+        }
+
+        // DOM elements
+        const outputDirInput = document.getElementById('output-dir');
+        const loadRoutesBtn = document.getElementById('load-routes');
+        const routeList = document.getElementById('route-list');
+        const routeViewer = document.getElementById('route-viewer');
+        const directorySelection = document.getElementById('directory-selection');
+        const directoryGrid = document.getElementById('directory-grid');
+        const videoPlayer = document.getElementById('video-player');
+        const videoTypeSelect = document.getElementById('video-type');
+        const infractionsList = document.getElementById('infractions-list');
+        const infractionCount = document.getElementById('infraction-count');
+        const filterInput = document.getElementById('filter-input');
+        const currentTimeInput = document.getElementById('current-time');
+        const currentFrameInput = document.getElementById('current-frame');
+        const currentStepInput = document.getElementById('current-step');
+
+        // Infraction type metadata
+        const infractionTypes = {
+            'CollisionTest': { icon: '●', color: '#dc2626', label: 'Collision' },
+            'RunningRedLightTest': { icon: '●', color: '#ef4444', label: 'Red Light' },
+            'RunningStopTest': { icon: '●', color: '#f97316', label: 'Stop Sign' },
+            'OutsideRouteLanesTest': { icon: '●', color: '#f59e0b', label: 'Outside Lane' },
+            'OffRoadTest': { icon: '●', color: '#d97706', label: 'Off Road' },
+            'OnSidewalkTest': { icon: '●', color: '#ea580c', label: 'Sidewalk' },
+            'MinimumSpeedRouteTest': { icon: '●', color: '#64748b', label: 'Min Speed' },
+            'MinSpeedTest': { icon: '●', color: '#64748b', label: 'Min Speed' },
+            'ActorBlockedTest': { icon: '●', color: '#f43f5e', label: 'Blocked' },
+            'RouteCompletionTest': { icon: '●', color: '#22c55e', label: 'Completion' },
+        };
+
+        function getInfractionMeta(type) {
+            return infractionTypes[type] || { icon: '●', color: '#94a3b8', label: type };
+        }
+
+        // Helper function to convert step number to video timestamp
+        // Accounts for produce_frame_frequency by calculating which video frame contains the step
+        function stepToVideoTime(step) {
+            // CARLA runs at 20 FPS, video runs at videoFPS
+            // produce_frame_frequency = 20 / videoFPS
+            // video_frame = floor(step / produce_frame_frequency) = floor(step * videoFPS / 20)
+            // video_time = video_frame / videoFPS
+            const CARLA_FPS = 20;
+            const videoFrame = Math.floor(step * videoFPS / CARLA_FPS);
+            return videoFrame / videoFPS;
+        }
+
+        // Helper function to convert video frame to CARLA step (inverse of above)
+        function videoFrameToStep(frame) {
+            // step = frame * produce_frame_frequency = frame * (20 / videoFPS)
+            const CARLA_FPS = 20;
+            return Math.floor(frame * CARLA_FPS / videoFPS);
+        }
+
+        // Load output directories on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            // Hide file operation buttons if in read-only mode
+            if (READ_ONLY_MODE) {
+                console.log('Read-only mode enabled - hiding file operation buttons');
+                const openDirBtn = document.getElementById('open-directory-btn');
+                const cutControls = document.getElementById('cut-controls');
+                if (openDirBtn) {
+                    openDirBtn.classList.add('read-only-hide');
+                    console.log('Hid open directory button');
+                }
+                if (cutControls) {
+                    cutControls.classList.add('read-only-hide');
+                    console.log('Hid cut controls');
+                }
+            } else {
+                console.log('Read-only mode disabled - file operations available');
+            }
+
+            loadOutputDirectories();
+        });
+
+        async function loadOutputDirectories() {
+            try {
+                directoryGrid.innerHTML = '<div class="col-12 text-center p-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div><div class="mt-2 text-muted">Loading directories...</div></div>';
+                const response = await fetch('/api/output_directories');
+                const data = await response.json();
+
+                if (data.error) {
+                    directoryGrid.innerHTML = `<div class="col-12"><div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div></div>`;
+                    return;
+                }
+
+                if (data.directories.length === 0) {
+                    directoryGrid.innerHTML = '<div class="col-12"><div class="alert alert-warning"><i class="bi bi-inbox"></i> No output directories found</div></div>';
+                    return;
+                }
+
+                renderOutputDirectories(data.directories);
+                updateDirectoryStats(data.directories);
+            } catch (error) {
+                directoryGrid.innerHTML = `<div class="col-12"><div class="alert alert-danger"><i class="bi bi-x-circle"></i> Error loading directories: ${error.message}</div></div>`;
+            }
+        }
+
+        function renderOutputDirectories(directories) {
+            // Apply infractions filter
+            let filteredDirs = directories;
+            if (showInfractionsOnly) {
+                filteredDirs = directories.filter(d => d.infraction_count > 0);
+            }
+
+            if (filteredDirs.length === 0) {
+                directoryGrid.innerHTML = '<div class="col-12"><div class="alert alert-info"><i class="bi bi-info-circle"></i> No directories match the filter</div></div>';
+                return;
+            }
+
+            directoryGrid.innerHTML = filteredDirs.map(dir => `
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 hover-shadow" onclick="selectOutputDirectory('${dir.full_path.replace(/'/g, "\\'")}')" style="cursor: pointer; transition: transform 0.2s;">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <h6 class="card-title text-primary mb-0">
+                                    <i class="bi bi-folder2"></i> ${dir.experiment}
+                                </h6>
+                                ${dir.infraction_count > 0 ?
+                                    `<span class="badge ${dir.infraction_count > 10 ? 'bg-danger' : 'bg-warning'}  ">${dir.infraction_count}</span>` :
+                                    '<span class="badge bg-success"><i class="bi bi-check-lg"></i></span>'
+                                }
+                            </div>
+                            <p class="card-text small text-muted mb-1">
+                                <i class="bi bi-diagram-3"></i> ${dir.benchmark}
+                            </p>
+                            <p class="card-text small text-secondary mb-0">
+                                <i class="bi bi-clock"></i> ${dir.timestamp}
+                            </p>
+                        </div>
+                        <div class="card-footer bg-transparent border-top-0 pt-0 pb-2">
+                            <small class="text-muted">${dir.path}</small>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateDirectoryStats(directories) {
+            const total = directories.length;
+            const withInfractions = directories.filter(d => d.infraction_count > 0).length;
+            const totalInfractions = directories.reduce((sum, d) => sum + (d.infraction_count || 0), 0);
+
+            // This is shown in main panel, not needed in sidebar anymore
+        }
+
+        async function selectOutputDirectory(dirPath) {
+            currentDirectory = dirPath;
+            outputDirInput.value = dirPath;
+
+            // Hide directory selection, keep route viewer hidden until route is selected
+            directorySelection.style.display = 'none';
+
+            // Show active sidebar state
+            document.getElementById('sidebar-initial').style.display = 'none';
+            document.getElementById('sidebar-active').style.display = 'block';
+
+            // Load routes from this output directory (will populate sidebar)
+            await loadRoutes();
+        }
+
+        // Load routes
+        loadRoutesBtn.addEventListener('click', () => {
+            const dir = outputDirInput.value.trim();
+            if (dir) {
+                currentDirectory = dir;
+            }
+            loadRoutes();
+        });
+
+        async function loadRoutes() {
+            const dir = currentDirectory || outputDirInput.value.trim();
+            const url = dir ? `/api/routes?dir=${encodeURIComponent(dir)}` : '/api/routes';
+
+            try {
+                routeList.innerHTML = '<div class="text-center p-3"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    routeList.innerHTML = `<div class="alert alert-danger m-2"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
+                    return;
+                }
+
+                // Update directory from backend response if not set
+                if (data.output_dir && !currentDirectory) {
+                    currentDirectory = data.output_dir;
+                    outputDirInput.value = data.output_dir; // Persist in text field
+                }
+
+                if (data.routes.length === 0) {
+                    routeList.innerHTML = '<div class="alert alert-warning m-2"><i class="bi bi-inbox"></i> No routes found</div>';
+                    return;
+                }
+
+                // Update UI: hide directory selection, show sidebar with routes
+                directorySelection.style.display = 'none';
+                document.getElementById('sidebar-initial').style.display = 'none';
+                document.getElementById('sidebar-active').style.display = 'block';
+
+                routesData = data.routes; // Store routes data globally
+                renderRoutes(data.routes);
+                updateRouteStats(data.routes);
+                updateURL(); // Update URL with directory after loading
+            } catch (error) {
+                routeList.innerHTML = `<div class="alert alert-danger m-2"><i class="bi bi-x-circle"></i> Error loading routes: ${error.message}</div>`;
+            }
+        }
+
+        function updateRouteStats(routes) {
+            const total = routes.length;
+            const withInfractions = routes.filter(r => r.infraction_count > 0).length;
+            const totalInfractions = routes.reduce((sum, r) => sum + (r.infraction_count || 0), 0);
+
+            document.getElementById('route-stats').innerHTML = `
+                <div class="row g-2 text-center small">
+                    <div class="col-12">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="fw-bold text-primary fs-5">${total}</div>
+                            <div class="text-muted">Routes</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="fw-bold text-warning">${withInfractions}</div>
+                            <div class="text-muted">With Issues</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-2 bg-white rounded border">
+                            <div class="fw-bold text-danger">${totalInfractions}</div>
+                            <div class="text-muted">Infractions</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderRoutes(routes) {
+            // Apply infractions filter
+            let filteredRoutes = routes;
+            if (showInfractionsOnly) {
+                filteredRoutes = routes.filter(r => r.infraction_count > 0);
+            }
+
+            if (filteredRoutes.length === 0) {
+                routeList.innerHTML = '<div class="alert alert-info m-2"><i class="bi bi-info-circle"></i> No routes match the filter</div>';
+                return;
+            }
+
+            routeList.innerHTML = filteredRoutes.map(route => `
+                <div class="card mb-2 route-card" data-route-name="${route.name}" onclick="selectRoute('${route.name}')" style="cursor: pointer;">
+                    <div class="card-body p-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong class="text-dark">${route.name}</strong>
+                            ${route.infraction_count > 0 ?
+                                `<span class="badge ${route.infraction_count > 10 ? 'bg-danger' : 'bg-warning'}">${route.infraction_count}</span>` :
+                                '<span class="badge bg-success"><i class="bi bi-check-lg"></i></span>'
+                            }
+                        </div>
+                        <div class="text-muted small mt-1">
+                            ${route.has_debug_video ? '<i class="bi bi-camera-video"></i> Debug ' : ''}
+                            ${route.has_grid_video ? '<i class="bi bi-grid-3x3"></i> Grid ' : ''}
+                            ${route.has_demo_video ? '<i class="bi bi-play-circle"></i> Demo' : ''}
+                            ${route.video_fps ? `<i class="bi bi-speedometer2"></i> ${route.video_fps.toFixed(1)} FPS` : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Re-apply highlighting if a route is currently selected
+            if (currentRoute) {
+                highlightCurrentRoute();
+            }
+        }
+
+        function highlightCurrentRoute() {
+            document.querySelectorAll('.route-card').forEach(card => {
+                if (card.dataset.routeName === currentRoute) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('selected');
+                }
+            });
+        }
+
+        async function selectRoute(routeName) {
+            currentRoute = routeName;
+            // Clear the last clicked infraction when switching routes
+            lastClickedInfractionStep = null;
+            updateURL();
+
+            // Highlight selected route
+            highlightCurrentRoute();
+
+            // Scroll to selected route
+            const selectedCard = document.querySelector(`.route-card[data-route-name="${routeName}"]`);
+            if (selectedCard) {
+                selectedCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+
+            // Update UI
+            document.getElementById('route-name').textContent = routeName;
+            directorySelection.style.display = 'none';
+            routeViewer.style.display = 'block';
+
+            // Hide file operation buttons if in read-only mode (needs to be done after showing route-viewer)
+            if (READ_ONLY_MODE) {
+                const openDirBtn = document.getElementById('open-directory-btn');
+                const cutControls = document.getElementById('cut-controls');
+                if (openDirBtn) openDirBtn.classList.add('read-only-hide');
+                if (cutControls) cutControls.classList.add('read-only-hide');
+            }
+
+            // Find route data to check video availability
+            const routeData = routesData.find(r => r.name === routeName);
+
+            // Set default video type: prefer debug, then grid, then demo
+            let videoType = videoTypeSelect.value;
+            if (routeData) {
+                if (routeData.has_debug_video) {
+                    videoType = 'debug';
+                } else if (routeData.has_grid_video) {
+                    videoType = 'grid';
+                } else if (routeData.has_demo_video) {
+                    videoType = 'demo';
+                }
+                videoTypeSelect.value = videoType;
+            }
+
+            // Load video
+            const dir = currentDirectory || outputDirInput.value.trim();
+            const videoUrl = dir ? `/video/${routeName}/${videoType}?dir=${encodeURIComponent(dir)}` : `/video/${routeName}/${videoType}`;
+            videoPlayer.src = videoUrl;
+
+            // Load infractions (this updates videoFPS)
+            await loadInfractions(routeName);
+
+            // Load checkpoint data (for metrics)
+            await loadCheckpointData(routeName);
+
+            // Update FPS display after checkpoint data loads (which resets the metrics innerHTML)
+            updateFPSDisplay();
+        }
+
+        async function loadInfractions(routeName) {
+            try {
+                infractionsList.innerHTML = '<div class="text-center p-4"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div><p class="mt-2 text-muted">Loading infractions...</p></div>';
+                const dir = currentDirectory || outputDirInput.value.trim();
+                const url = dir ? `/api/route/${routeName}/infractions?dir=${encodeURIComponent(dir)}` : `/api/route/${routeName}/infractions`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    infractionsList.innerHTML = `<div class="alert alert-danger m-3"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
+                    return;
+                }
+
+                // Update video FPS from API (use default if not available)
+                videoFPS = data.video_fps || 20;
+
+                // Filter out min speed and completion infractions completely
+                let filteredInfractions = data.infractions.filter(inf =>
+                    inf.infraction !== 'MinimumSpeedRouteTest' &&
+                    inf.infraction !== 'MinSpeedTest' &&
+                    !inf.infraction.toLowerCase().includes('minspeed') &&
+                    !inf.infraction.toLowerCase().includes('completion')
+                );
+
+                // Remove duplicates: keep only one infraction per step of the same type
+                const seen = new Map(); // Key: "step_infraction", Value: infraction object
+                infractions = filteredInfractions.filter(inf => {
+                    const key = `${inf.step}_${inf.infraction}`;
+                    if (seen.has(key)) {
+                        return false; // Skip duplicate
+                    }
+                    seen.set(key, inf);
+                    return true; // Keep first occurrence
+                });
+
+                applyFilters();
+            } catch (error) {
+                infractionsList.innerHTML = `<div class="alert alert-danger m-3"><i class="bi bi-x-circle"></i> Error: ${error.message}</div>`;
+            }
+        }
+
+        async function loadCheckpointData(routeName) {
+            try {
+                const dir = currentDirectory || outputDirInput.value.trim();
+                const url = dir ? `/api/route/${routeName}/checkpoint?dir=${encodeURIComponent(dir)}` : `/api/route/${routeName}/checkpoint`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (!data.error && data.values) {
+                    document.getElementById('route-metrics').innerHTML = `
+                        <span class="badge bg-primary">DS: ${data.values[0].toFixed(2)}</span>
+                        <span class="badge bg-info">RC: ${data.values[1].toFixed(2)}%</span>
+                        <span class="badge bg-danger">Infractions: ${data.values[4].toFixed(0)}</span>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading checkpoint data:', error);
+            }
+        }
+
+        function updateFPSDisplay() {
+            const metricsDiv = document.getElementById('route-metrics');
+            const existingFPS = metricsDiv.querySelector('.fps-badge');
+            if (existingFPS) {
+                existingFPS.textContent = `${videoFPS.toFixed(1)} FPS`;
+            } else {
+                metricsDiv.insertAdjacentHTML('beforeend', `<span class="badge bg-secondary fps-badge">${videoFPS.toFixed(1)} FPS</span>`);
+            }
+        }
+
+        function renderInfractions() {
+            infractionCount.textContent = filteredInfractions.length;
+
+            if (filteredInfractions.length === 0) {
+                infractionsList.innerHTML = '<div class="alert alert-info m-3"><i class="bi bi-info-circle"></i> No infractions found</div>';
+                return;
+            }
+
+            infractionsList.innerHTML = filteredInfractions.map((inf, idx) => {
+                const timestamp = stepToVideoTime(inf.step);
+                const minutes = Math.floor(timestamp / 60);
+                const seconds = (timestamp % 60).toFixed(2);
+                const timeStr = `${minutes}:${seconds.padStart(5, '0')}`;
+                const meta = getInfractionMeta(inf.infraction);
+                const metersText = inf.meters_travelled !== undefined ? `${inf.meters_travelled}m` : 'N/A';
+                const infractionNumber = idx + 1;
+
+                const cutButton = READ_ONLY_MODE ? '' : `
+                    <button class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation(); cutVideo(${inf.step}, ${infractionNumber})" title="Cut video around this infraction">
+                        <i class="bi bi-scissors"></i> Cut
+                    </button>
+                `;
+
+                return `
+                    <div class="border-bottom p-3 infraction-item" id="infraction-${inf.step}" data-step="${inf.step}" onclick="jumpToInfraction(${inf.step})" style="cursor: pointer; border-left: 4px solid ${meta.color} !important;">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <span class="fw-bold" style="color: ${meta.color}">
+                                <i class="bi bi-exclamation-circle"></i> ${infractionNumber}. ${meta.label}
+                            </span>
+                            <div class="d-flex flex-column align-items-end gap-1">
+                                <span class="badge bg-primary">${timeStr}</span>
+                                ${cutButton}
+                            </div>
+                        </div>
+                        <div class="small text-muted">
+                            <div>
+                                <i class="bi bi-flag"></i> Step: ${inf.step} |
+                                <i class="bi bi-film"></i> Frame: ${inf.frame} |
+                                <i class="bi bi-rulers"></i> Distance: ${metersText}
+                            </div>
+                            ${inf.message ? `<div class="mt-1 fst-italic">${inf.message}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function jumpToInfraction(step) {
+            const timestamp = stepToVideoTime(step);
+            // Get selected offset from radio buttons
+            const offsetRadio = document.querySelector('input[name="jump-offset"]:checked');
+            const offset = offsetRadio ? parseFloat(offsetRadio.value) : 3; // Default to 3s
+            const adjustedTime = Math.max(0, timestamp - offset);
+            videoPlayer.currentTime = adjustedTime;
+            videoPlayer.play();
+
+            // Track last clicked infraction and update URL
+            lastClickedInfractionStep = step;
+            updateURL();
+
+            // Enable auto-scroll for this click
+            shouldAutoScroll = true;
+
+            // Highlight clicked infraction
+            highlightInfractions();
+        }
+
+        function highlightInfractions() {
+            // Get current video step
+            const currentTime = videoPlayer.currentTime;
+            const currentFrame = Math.floor(currentTime * videoFPS);
+            const currentStep = videoFrameToStep(currentFrame);
+
+            // Find nearest infraction
+            let nearestInfraction = null;
+            let minDistance = Infinity;
+            filteredInfractions.forEach(inf => {
+                const distance = Math.abs(inf.step - currentStep);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    nearestInfraction = inf;
+                }
+            });
+
+            // Clear all highlights first
+            document.querySelectorAll('.infraction-item').forEach(item => {
+                item.classList.remove('clicked-infraction', 'nearest-infraction');
+            });
+
+            // Highlight clicked infraction (priority)
+            if (lastClickedInfractionStep !== null) {
+                const clickedElement = document.getElementById(`infraction-${lastClickedInfractionStep}`);
+                if (clickedElement) {
+                    clickedElement.classList.add('clicked-infraction');
+                    // Only auto-scroll once when shouldAutoScroll is true
+                    if (shouldAutoScroll) {
+                        clickedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        shouldAutoScroll = false; // Disable after first scroll
+                    }
+                }
+            }
+
+            // Highlight nearest infraction (secondary)
+            if (nearestInfraction && nearestInfraction.step !== lastClickedInfractionStep) {
+                const nearestElement = document.getElementById(`infraction-${nearestInfraction.step}`);
+                if (nearestElement) {
+                    nearestElement.classList.add('nearest-infraction');
+                    // Don't auto-scroll to nearest infraction
+                }
+            }
+        }
+
+        // Video controls
+        videoTypeSelect.addEventListener('change', () => {
+            if (currentRoute) {
+                const videoType = videoTypeSelect.value;
+                const currentTime = videoPlayer.currentTime;
+                const dir = currentDirectory || outputDirInput.value.trim();
+                const videoUrl = dir ? `/video/${currentRoute}/${videoType}?dir=${encodeURIComponent(dir)}` : `/video/${currentRoute}/${videoType}`;
+                videoPlayer.src = videoUrl;
+                videoPlayer.currentTime = currentTime;
+            }
+        });
+
+        // Handle speed button clicks
+        document.querySelectorAll('.speed-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const speed = parseFloat(e.target.dataset.speed);
+                videoPlayer.playbackRate = speed;
+
+                // Update active state
+                document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+
+                // Update URL with new speed
+                updateURL();
+            });
+        });
+
+        document.getElementById('back-5s').addEventListener('click', () => {
+            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 5);
+        });
+
+        document.getElementById('back-1s').addEventListener('click', () => {
+            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 1);
+        });
+
+        document.getElementById('forward-1s').addEventListener('click', () => {
+            videoPlayer.currentTime = Math.min(videoPlayer.duration, videoPlayer.currentTime + 1);
+        });
+
+        document.getElementById('forward-5s').addEventListener('click', () => {
+            videoPlayer.currentTime = Math.min(videoPlayer.duration, videoPlayer.currentTime + 5);
+        });
+
+        // Save timestamp button
+        document.getElementById('save-timestamp-btn').addEventListener('click', () => {
+            saveURLWithTimestamp();
+        });
+
+        // Update time display
+        function updateTimeDisplay() {
+            const time = videoPlayer.currentTime;
+            const frame = Math.floor(time * videoFPS);
+            const step = videoFrameToStep(frame);
+
+            // Only update if not currently being edited
+            if (document.activeElement !== currentTimeInput) {
+                currentTimeInput.value = time.toFixed(2);
+            }
+            if (document.activeElement !== currentFrameInput) {
+                currentFrameInput.value = frame;
+            }
+            if (document.activeElement !== currentStepInput) {
+                currentStepInput.value = step;
+            }
+
+            // Update infraction highlights
+            if (filteredInfractions.length > 0) {
+                highlightInfractions();
+            }
+        }
+
+        videoPlayer.addEventListener('timeupdate', updateTimeDisplay);
+        videoPlayer.addEventListener('seeked', updateTimeDisplay);
+
+        // Handle jumping to specific time/frame/step
+        currentTimeInput.addEventListener('change', (e) => {
+            const time = parseFloat(e.target.value);
+            if (!isNaN(time) && time >= 0 && time <= videoPlayer.duration) {
+                videoPlayer.currentTime = time;
+            } else {
+                updateTimeDisplay();
+            }
+        });
+
+        currentFrameInput.addEventListener('change', (e) => {
+            const frame = parseInt(e.target.value);
+            if (!isNaN(frame) && frame >= 0) {
+                const time = frame / videoFPS;
+                if (time <= videoPlayer.duration) {
+                    videoPlayer.currentTime = time;
+                } else {
+                    updateTimeDisplay();
+                }
+            } else {
+                updateTimeDisplay();
+            }
+        });
+
+        currentStepInput.addEventListener('change', (e) => {
+            const step = parseInt(e.target.value);
+            if (!isNaN(step) && step >= 0) {
+                const time = stepToVideoTime(step);
+                if (time <= videoPlayer.duration) {
+                    videoPlayer.currentTime = time;
+                } else {
+                    updateTimeDisplay();
+                }
+            } else {
+                updateTimeDisplay();
+            }
+        });
+
+        // Allow Enter key to apply changes
+        [currentTimeInput, currentFrameInput, currentStepInput].forEach(input => {
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.target.blur();
+                }
+            });
+        });
+
+        // Filter infractions
+        function applyFilters() {
+            const searchFilter = filterInput.value.toLowerCase();
+
+            filteredInfractions = infractions.filter(inf => {
+                // Apply search filter
+                if (searchFilter && !inf.infraction.toLowerCase().includes(searchFilter) &&
+                    !(inf.message && inf.message.toLowerCase().includes(searchFilter))) {
+                    return false;
+                }
+
+                return true;
+            });
+
+            renderInfractions();
+        }
+
+        filterInput.addEventListener('input', applyFilters);
+
+        document.getElementById('clear-filter').addEventListener('click', () => {
+            filterInput.value = '';
+            applyFilters();
+        });
+
+        // Update URL when offset changes
+        document.querySelectorAll('input[name="jump-offset"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                updateURL();
+            });
+        });
+
+        // Open directory function
+        async function openVideoDirectory() {
+            if (!currentRoute) {
+                alert('No route selected');
+                return;
+            }
+
+            const dir = currentDirectory || outputDirInput.value.trim();
+
+            // Show loading indicator
+            const button = event.target.closest('button');
+            const originalHTML = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+            try {
+                const response = await fetch('/api/open_directory', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        route_name: currentRoute,
+                        output_dir: dir
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Error opening directory: ' + data.error);
+                } else {
+                    console.log('Opened directory:', data.path);
+                }
+            } catch (error) {
+                alert('Error opening directory: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = originalHTML;
+            }
+        }
+
+        // Video cut function
+        async function cutVideo(step, infractionNumber) {
+            if (!currentRoute) {
+                return;
+            }
+
+            const timestamp = stepToVideoTime(step);
+            const offsetRadio = document.querySelector('input[name="jump-offset"]:checked');
+            const buffer = offsetRadio ? parseFloat(offsetRadio.value) : 3;
+            const videoType = videoTypeSelect.value;
+            const dir = currentDirectory || outputDirInput.value.trim();
+
+            // Show loading indicator
+            const button = event.target.closest('button');
+            const originalHTML = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+            try {
+                const response = await fetch('/api/cut_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        route_name: currentRoute,
+                        video_type: videoType,
+                        step: step,
+                        timestamp: timestamp,
+                        buffer: buffer,
+                        infraction_number: infractionNumber,
+                        output_dir: dir
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Error cutting video:', data.error);
+                } else {
+                    console.log('Video cut saved to:', data.output_path);
+                }
+            } catch (error) {
+                console.error('Error cutting video:', error.message);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = originalHTML;
+            }
+        }
+
+        // URL state management
+        function updateURL() {
+            const params = new URLSearchParams();
+            if (currentDirectory) {
+                params.set('dir', currentDirectory);
+            }
+            if (currentRoute) {
+                params.set('route', currentRoute);
+            }
+            // Add video speed if not default (1.0)
+            if (videoPlayer && videoPlayer.playbackRate !== 1.0) {
+                params.set('speed', videoPlayer.playbackRate.toString());
+            }
+            // Add last clicked infraction step
+            if (lastClickedInfractionStep !== null) {
+                params.set('infraction', lastClickedInfractionStep.toString());
+            }
+            // Add offset value
+            const offsetRadio = document.querySelector('input[name="jump-offset"]:checked');
+            if (offsetRadio) {
+                const offset = parseFloat(offsetRadio.value);
+                // Only add if not default (3s)
+                if (offset !== 3) {
+                    params.set('offset', offset.toString());
+                }
+            }
+            const newURL = params.toString() ? `?${params.toString()}` : '/';
+            window.history.pushState({}, '', newURL);
+        }
+
+        function saveURLWithTimestamp() {
+            const params = new URLSearchParams();
+            if (currentDirectory) {
+                params.set('dir', currentDirectory);
+            }
+            if (currentRoute) {
+                params.set('route', currentRoute);
+            }
+            // Add current video time
+            if (videoPlayer && !isNaN(videoPlayer.currentTime)) {
+                params.set('time', videoPlayer.currentTime.toFixed(2));
+            }
+            // Add video speed if not default (1.0)
+            if (videoPlayer && videoPlayer.playbackRate !== 1.0) {
+                params.set('speed', videoPlayer.playbackRate.toString());
+            }
+            // Add offset value
+            const offsetRadio = document.querySelector('input[name="jump-offset"]:checked');
+            if (offsetRadio) {
+                const offset = parseFloat(offsetRadio.value);
+                if (offset !== 3) {
+                    params.set('offset', offset.toString());
+                }
+            }
+
+            // Update the current URL
+            const newURL = params.toString() ? `?${params.toString()}` : '/';
+            window.history.pushState({}, '', newURL);
+
+            // Copy full URL to clipboard
+            const fullURL = `${window.location.origin}${window.location.pathname}${newURL}`;
+            navigator.clipboard.writeText(fullURL).then(() => {
+                // Show success feedback
+                const btn = document.getElementById('save-timestamp-btn');
+                const originalHTML = btn.innerHTML;
+                btn.innerHTML = '<i class="bi bi-check2"></i> Saved!';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-primary');
+                setTimeout(() => {
+                    btn.innerHTML = originalHTML;
+                    btn.classList.remove('btn-primary');
+                    btn.classList.add('btn-success');
+                }, 2000);
+            }).catch(err => {
+                alert('Failed to copy URL: ' + err);
+            });
+        }
+
+        function loadStateFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            const dir = params.get('dir');
+            const route = params.get('route');
+            const speed = params.get('speed');
+            const infractionStep = params.get('infraction');
+            const offset = params.get('offset');
+            const time = params.get('time');
+
+            // Restore video speed
+            if (speed) {
+                const speedValue = parseFloat(speed);
+                if (videoPlayer) {
+                    videoPlayer.playbackRate = speedValue;
+                }
+                // Update UI to reflect speed
+                document.querySelectorAll('.speed-btn').forEach(btn => {
+                    if (parseFloat(btn.dataset.speed) === speedValue) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+            }
+
+            // Restore offset selection
+            if (offset) {
+                const offsetValue = parseFloat(offset);
+                document.querySelectorAll('input[name="jump-offset"]').forEach(radio => {
+                    if (parseFloat(radio.value) === offsetValue) {
+                        radio.checked = true;
+                    }
+                });
+            }
+
+            if (dir) {
+                currentDirectory = dir;
+                outputDirInput.value = dir; // Persist in text field
+
+                // Update UI: hide directory selection, show sidebar with routes
+                directorySelection.style.display = 'none';
+                document.getElementById('sidebar-initial').style.display = 'none';
+                document.getElementById('sidebar-active').style.display = 'block';
+
+                loadRoutes().then(() => {
+                    if (route) {
+                        selectRoute(route).then(() => {
+                            // After route is loaded, restore video time or jump to infraction
+                            if (infractionStep) {
+                                const step = parseInt(infractionStep);
+                                lastClickedInfractionStep = step;
+                                // Wait a bit for video to be ready
+                                setTimeout(() => {
+                                    jumpToInfraction(step);
+                                }, 500);
+                            } else if (time) {
+                                // Restore saved timestamp
+                                const timeValue = parseFloat(time);
+                                // Wait for video metadata to load before seeking
+                                const seekToTime = () => {
+                                    if (videoPlayer.readyState >= 2) { // HAVE_CURRENT_DATA or better
+                                        videoPlayer.currentTime = timeValue;
+                                    } else {
+                                        videoPlayer.addEventListener('loadedmetadata', () => {
+                                            videoPlayer.currentTime = timeValue;
+                                        }, { once: true });
+                                    }
+                                };
+                                setTimeout(seekToTime, 500);
+                            }
+                        });
+                    }
+                });
+            }
+        }
+
+        // Handle browser back/forward buttons
+        window.addEventListener('popstate', () => {
+            loadStateFromURL();
+        });
+
+        // Initialize from URL on page load
+        loadStateFromURL();
+
+        // Allow Enter key in output directory input
+        outputDirInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadRoutesBtn.click();
+            }
+        });
+
+        // Filter routes by infractions
+        document.getElementById('filter-infractions-only').addEventListener('change', (e) => {
+            showInfractionsOnly = e.target.checked;
+            if (routesData.length > 0) {
+                renderRoutes(routesData);
+                // Update stats to reflect filtered view
+                const filteredRoutes = showInfractionsOnly ? routesData.filter(r => r.infraction_count > 0) : routesData;
+                updateRouteStats(filteredRoutes);
+            }
+        });
+
+        // Custom cut functionality
+        document.getElementById('cut-custom').addEventListener('click', async () => {
+            if (!currentRoute || !videoPlayer.src) {
+                alert('No route or video loaded');
+                return;
+            }
+
+            const startInput = document.getElementById('cut-start').value.trim();
+            const stopInput = document.getElementById('cut-stop').value.trim();
+
+            if (!startInput || !stopInput) {
+                alert('Please enter both start and stop times');
+                return;
+            }
+
+            const startTime = parseTimeString(startInput);
+            const stopTime = parseTimeString(stopInput);
+
+            if (startTime >= stopTime) {
+                alert('Start time must be before stop time');
+                return;
+            }
+
+            const videoType = videoTypeSelect.value;
+            const dir = currentDirectory || outputDirInput.value.trim();
+
+            // Show loading indicator
+            const button = document.getElementById('cut-custom');
+            const originalHTML = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+            try {
+                const response = await fetch('/api/cut_custom_video', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        route_name: currentRoute,
+                        video_type: videoType,
+                        start_time: startTime,
+                        stop_time: stopTime,
+                        output_dir: dir
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Error cutting video: ' + data.error);
+                } else {
+                    console.log('Video saved to:', data.output_path);
+                }
+            } catch (error) {
+                alert('Error cutting video: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = originalHTML;
+            }
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (!videoPlayer.src) return;
+
+            switch(e.key) {
+                case ' ':
+                    e.preventDefault();
+                    videoPlayer.paused ? videoPlayer.play() : videoPlayer.pause();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - (e.shiftKey ? 5 : 1));
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    videoPlayer.currentTime = Math.min(videoPlayer.duration, videoPlayer.currentTime + (e.shiftKey ? 5 : 1));
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>

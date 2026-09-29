@@ -184,7 +184,7 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else cache_position[0] + sequence_length + 1
             )
 

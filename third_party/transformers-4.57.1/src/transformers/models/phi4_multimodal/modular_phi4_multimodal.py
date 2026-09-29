@@ -1290,7 +1290,7 @@ def adaptive_enc_mask(x_len, chunk_start_idx, left_window=0, right_window=0):
         Returns:
             mask ("torch.Tensor"): a mask tensor for streaming model
     """
-    chunk_start_idx = "torch.Tensor"(chunk_start_idx).long()
+    chunk_start_idx = torch.Tensor(chunk_start_idx).long()
     start_pad = torch.nn.functional.pad(
         chunk_start_idx, (1, 0)
     )  # append 0 to the beginning, so it becomes [0, 0, 18, 36, 48]

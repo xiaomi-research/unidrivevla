@@ -374,7 +374,7 @@ class AutomaticSpeechRecognitionPipeline(ChunkPipeline):
         if is_torch_available():
             import torch
 
-            if isinstance(inputs, "torch.Tensor"):
+            if isinstance(inputs, torch.Tensor):
                 inputs = inputs.cpu().numpy()
 
         if is_torchcodec_available():
@@ -435,7 +435,7 @@ class AutomaticSpeechRecognitionPipeline(ChunkPipeline):
                 # can add extra data in the inputs, so we need to keep track
                 # of the original length in the stride so we can cut properly.
                 stride = (inputs.shape[0], int(round(stride[0] * ratio)), int(round(stride[1] * ratio)))
-        if not isinstance(inputs, (np.ndarray, "torch.Tensor")):
+        if not isinstance(inputs, (np.ndarray, torch.Tensor)):
             raise TypeError(f"We expect a numpy ndarray or torch tensor as input, got `{type(inputs)}`")
         if inputs.ndim != 1:
             logger.warning(

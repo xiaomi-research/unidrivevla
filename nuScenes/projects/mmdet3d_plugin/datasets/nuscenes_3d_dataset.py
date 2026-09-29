@@ -414,7 +414,7 @@ class NuScenes3DDataset(Dataset):
             gt_names=gt_names_3d,
         )
         if "instance_inds" in info:
-            instance_inds = np.array(info["instance_inds"], dtype=np.int)[mask]
+            instance_inds = np.array(info["instance_inds"], dtype=int)[mask]
             anns_results["instance_inds"] = instance_inds
             
         if 'gt_agent_fut_trajs' in info:
@@ -433,6 +433,8 @@ class NuScenes3DDataset(Dataset):
                 vad_info = self.vad_infos_map[token]
                 if 'gt_ego_his_trajs' in vad_info:
                     anns_results['gt_ego_his_trajs'] = vad_info['gt_ego_his_trajs']
+                if 'gt_ego_lcf_feat' in vad_info:
+                    anns_results['gt_ego_lcf_feat'] = vad_info['gt_ego_lcf_feat']
 
             ## get future box for planning eval
             fut_ts = int(info['gt_ego_fut_masks'].sum())
@@ -849,6 +851,97 @@ class NuScenes3DDataset(Dataset):
         print_log('\n'+str(table), logger=logger)
         return metrics
 
+    def _evaluate_ego_status(self, results, logger=None):
+        status_names = [
+            'accel_x', 'accel_y', 'accel_z',
+            'rot_rate_x', 'rot_rate_y', 'rot_rate_z',
+            'vel_x', 'vel_y', 'vel_z',
+            'steer',
+        ]
+        preds = []
+        gts = []
+        tokens = []
+        missing = 0
+
+        for i, result in enumerate(results):
+            if i >= len(self.data_infos):
+                break
+            img_bbox = result.get('img_bbox', result)
+            pred = img_bbox.get('ego_status_pred')
+            if pred is None:
+                missing += 1
+                continue
+            if torch.is_tensor(pred):
+                pred = pred.detach().cpu().numpy()
+            pred = np.asarray(pred, dtype=np.float32).reshape(-1)
+            gt = np.asarray(self.data_infos[i]['ego_status'], dtype=np.float32).reshape(-1)
+            dim = min(pred.shape[0], gt.shape[0])
+            if dim == 0:
+                missing += 1
+                continue
+            preds.append(pred[:dim])
+            gts.append(gt[:dim])
+            tokens.append(self.data_infos[i]['token'])
+
+        metrics = {
+            'ego_status/count': len(preds),
+            'ego_status/missing': missing,
+        }
+        if len(preds) == 0:
+            print_log('No ego_status_pred found in results; skip ego status evaluation.', logger=logger)
+            return metrics
+
+        dim = min(x.shape[0] for x in preds)
+        pred_arr = np.stack([x[:dim] for x in preds], axis=0)
+        gt_arr = np.stack([x[:dim] for x in gts], axis=0)
+        err = pred_arr - gt_arr
+        abs_err = np.abs(err)
+        sq_err = err ** 2
+
+        metrics.update({
+            'ego_status/dim': dim,
+            'ego_status/mae': float(abs_err.mean()),
+            'ego_status/rmse': float(np.sqrt(sq_err.mean())),
+            'ego_status/max_abs': float(abs_err.max()),
+        })
+
+        per_dim_mae = abs_err.mean(axis=0)
+        per_dim_rmse = np.sqrt(sq_err.mean(axis=0))
+        for j in range(dim):
+            name = status_names[j] if j < len(status_names) else f'dim{j}'
+            metrics[f'ego_status/{name}_mae'] = float(per_dim_mae[j])
+            metrics[f'ego_status/{name}_rmse'] = float(per_dim_rmse[j])
+
+        table = prettytable.PrettyTable(['ego_status metric', 'value'])
+        for row in [
+            ['count', len(preds)],
+            ['missing', missing],
+            ['dim', dim],
+            ['mae', f'{metrics["ego_status/mae"]:.4f}'],
+            ['rmse', f'{metrics["ego_status/rmse"]:.4f}'],
+            ['max_abs', f'{metrics["ego_status/max_abs"]:.4f}'],
+        ]:
+            table.add_row(row)
+        print_log('\n' + table.get_string(), logger=logger)
+
+        dim_table = prettytable.PrettyTable(['dim', 'name', 'mae', 'rmse'])
+        for j in range(dim):
+            name = status_names[j] if j < len(status_names) else f'dim{j}'
+            dim_table.add_row([j, name, f'{per_dim_mae[j]:.4f}', f'{per_dim_rmse[j]:.4f}'])
+        print_log('\n' + dim_table.get_string(), logger=logger)
+
+        if self.work_dir is not None:
+            mmcv.dump(metrics, osp.join(self.work_dir, 'ego_status_metrics.json'))
+            mmcv.dump({
+                token: {
+                    'pred': pred_arr[k].tolist(),
+                    'gt': gt_arr[k].tolist(),
+                    'abs_err': abs_err[k].tolist(),
+                }
+                for k, token in enumerate(tokens)
+            }, osp.join(self.work_dir, 'ego_status_predictions.pkl'))
+        return metrics
+
     def evaluate(
         self,
         results,
@@ -919,6 +1012,10 @@ class NuScenes3DDataset(Dataset):
             planning_results_dict = planning_eval(results, self.eval_config, logger=logger)
             results_dict.update(planning_results_dict)
 
+        if eval_mode.get('with_ego_status', False):
+            ego_results_dict = self._evaluate_ego_status(results, logger=logger)
+            results_dict.update(ego_results_dict)
+
         if show or out_dir:
             self.show(results, save_dir=out_dir, show=show, pipeline=pipeline)
         
@@ -961,6 +1058,12 @@ class NuScenes3DDataset(Dataset):
                 obj_box_col = obj_box_col[0] if len(obj_box_col) > 0 else 0
             metric_str += f'obj_box_col: {(obj_box_col*100):.3f}%\n'
             metric_str += f'L2: {results_dict["L2"]:.4f}\n\n'
+
+        if "ego_status/mae" in results_dict:
+            metric_str += f'ego_status_count: {results_dict["ego_status/count"]}\n'
+            metric_str += f'ego_status_dim: {results_dict["ego_status/dim"]}\n'
+            metric_str += f'ego_status_mae: {results_dict["ego_status/mae"]:.4f}\n'
+            metric_str += f'ego_status_rmse: {results_dict["ego_status/rmse"]:.4f}\n\n'
         
         print_log(metric_str, logger=logger)
         return results_dict

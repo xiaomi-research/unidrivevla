@@ -494,7 +494,7 @@ class PegasusPreTrainedModel(PreTrainedModel):
                 # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
                 attention_mask = _prepare_4d_attention_mask_for_sdpa(attention_mask, inputs_embeds.dtype)
             elif self.config._attn_implementation == "flex_attention":
-                if isinstance(attention_mask, "torch.Tensor"):
+                if isinstance(attention_mask, torch.Tensor):
                     attention_mask = make_flex_block_causal_mask(attention_mask, is_causal=False)
             else:
                 # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
@@ -511,7 +511,7 @@ class PegasusPreTrainedModel(PreTrainedModel):
         past_key_values: Cache,
     ):
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             # Other attention flavors support in-built causal (when `mask is None`)
             # while we need to create our specific block mask regardless
@@ -552,7 +552,7 @@ class PegasusPreTrainedModel(PreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 
@@ -657,7 +657,7 @@ class PegasusPreTrainedModel(PreTrainedModel):
                     tgt_len=input_shape[-1],
                 )
             elif self.config._attn_implementation == "flex_attention":
-                if isinstance(encoder_attention_mask, "torch.Tensor"):
+                if isinstance(encoder_attention_mask, torch.Tensor):
                     encoder_attention_mask = make_flex_block_causal_mask(
                         encoder_attention_mask,
                         query_length=input_shape[-1],

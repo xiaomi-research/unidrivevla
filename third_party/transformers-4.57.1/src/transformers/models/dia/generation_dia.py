@@ -440,7 +440,7 @@ class DiaGenerationMixin(GenerationMixin):
             **kwargs,
         )
 
-        return_dict_in_generate = not isinstance(output, "torch.Tensor")
+        return_dict_in_generate = not isinstance(output, torch.Tensor)
 
         if return_dict_in_generate:
             output_sequences = output.sequences

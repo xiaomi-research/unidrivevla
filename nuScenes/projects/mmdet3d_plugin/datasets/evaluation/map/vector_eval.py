@@ -1,4 +1,5 @@
 import prettytable
+import os
 from typing import Dict, List, Optional
 from time import time
 from copy import deepcopy
@@ -18,7 +19,54 @@ from .AP import instance_match, average_precision
 
 INTERP_NUM = 200 # number of points to interpolate during evaluation
 THRESHOLDS = [0.5, 1.0, 1.5] # AP thresholds
-N_WORKERS = 1 # num workers to parallel
+N_WORKERS = int(os.getenv("MAP_EVAL_WORKERS", "1"))  # num workers to parallel
+MAP_EVAL_CHUNKSIZE = max(1, int(os.getenv("MAP_EVAL_CHUNKSIZE", "16")))
+
+
+def _interp_fixed_num(vector: NDArray, num_pts: int) -> NDArray:
+    """Interpolate a polyline without capturing the evaluator instance."""
+    line = LineString(vector)
+    distances = np.linspace(0, line.length, num_pts)
+    return np.array([list(line.interpolate(distance).coords)
+                     for distance in distances]).squeeze()
+
+
+def _evaluate_map_sample(
+        pred_vectors: List,
+        scores: List,
+        groundtruth: List,
+        thresholds: List,
+        metric: str = 'metric') -> Dict[int, NDArray]:
+    """Evaluate one sample as a module-level worker function.
+
+    Keeping this function independent of VectorEvaluate prevents
+    multiprocessing from serializing the evaluator, dataset, and cached GT
+    dictionary into every Pool task.
+    """
+    pred_lines = []
+    for vector in pred_vectors:
+        pred_lines.append(_interp_fixed_num(np.array(vector), INTERP_NUM))
+    if pred_lines:
+        pred_lines = np.stack(pred_lines)
+    else:
+        pred_lines = np.zeros((0, INTERP_NUM, 2))
+
+    gt_lines = []
+    for vector in groundtruth:
+        gt_lines.append(_interp_fixed_num(vector, INTERP_NUM))
+    if gt_lines:
+        gt_lines = np.stack(gt_lines)
+    else:
+        gt_lines = np.zeros((0, INTERP_NUM, 2))
+
+    scores = np.array(scores)
+    tp_fp_list = instance_match(pred_lines, scores, gt_lines, thresholds, metric)
+    tp_fp_score_by_thr = {}
+    for i, thr in enumerate(thresholds):
+        tp, fp = tp_fp_list[i]
+        tp_fp_score_by_thr[thr] = np.hstack([tp[:, None], fp[:, None], scores[:, None]])
+    return tp_fp_score_by_thr
+
 
 class VectorEvaluate(object):
     """Evaluator for vectorized map.
@@ -64,12 +112,7 @@ class VectorEvaluate(object):
         Returns:
             sampled_points (array): interpolated coordinates
         '''
-        line = LineString(vector)
-        distances = np.linspace(0, line.length, num_pts)
-        sampled_points = np.array([list(line.interpolate(distance).coords) 
-            for distance in distances]).squeeze()
-        
-        return sampled_points
+        return _interp_fixed_num(vector, num_pts)
     
     def interp_fixed_dist(self, 
                           vector: NDArray,
@@ -111,37 +154,8 @@ class VectorEvaluate(object):
             tp_fp_score_by_thr (Dict): matching results at different thresholds
                 e.g. {0.5: (M, 2), 1.0: (M, 2), 1.5: (M, 2)}
         '''
-        pred_lines = []
-
-        # interpolate predictions
-        for vector in pred_vectors:
-            vector = np.array(vector)
-            vector_interp = self.interp_fixed_num(vector, INTERP_NUM)
-            pred_lines.append(vector_interp)
-        if pred_lines:
-            pred_lines = np.stack(pred_lines)
-        else:
-            pred_lines = np.zeros((0, INTERP_NUM, 2))
-
-        # interpolate groundtruth
-        gt_lines = []
-        for vector in groundtruth:
-            vector_interp = self.interp_fixed_num(vector, INTERP_NUM)
-            gt_lines.append(vector_interp)
-        if gt_lines:
-            gt_lines = np.stack(gt_lines)
-        else:
-            gt_lines = np.zeros((0, INTERP_NUM, 2))
-        
-        scores = np.array(scores)
-        tp_fp_list = instance_match(pred_lines, scores, gt_lines, thresholds, metric) # (M, 2)
-        tp_fp_score_by_thr = {}
-        for i, thr in enumerate(thresholds):
-            tp, fp = tp_fp_list[i]
-            tp_fp_score = np.hstack([tp[:, None], fp[:, None], scores[:, None]])
-            tp_fp_score_by_thr[thr] = tp_fp_score
-        
-        return tp_fp_score_by_thr # {0.5: (M, 2), 1.0: (M, 2), 1.5: (M, 2)}
+        return _evaluate_map_sample(
+            pred_vectors, scores, groundtruth, thresholds, metric)
         
     def evaluate(self, 
                  result_path: str, 
@@ -209,9 +223,12 @@ class VectorEvaluate(object):
             }
             sum_AP = 0
 
-            fn = partial(self._evaluate_single, thresholds=self.thresholds, metric=metric)
+            # Do not bind self here: it contains the full cached GT set and
+            # would otherwise be serialized into every multiprocessing task.
+            fn = partial(_evaluate_map_sample, thresholds=self.thresholds, metric=metric)
             if self.n_workers > 0 and len(samples) > 81:
-                tpfp_score_list = pool.starmap(fn, samples)
+                tpfp_score_list = pool.starmap(
+                    fn, samples, chunksize=MAP_EVAL_CHUNKSIZE)
             else:
                 tpfp_score_list = []
                 for sample in samples:

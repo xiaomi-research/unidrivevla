@@ -249,7 +249,7 @@ class BeamSearchScorer(BeamScorer):
         next_beam_tokens = torch.zeros((batch_size, self.group_size), dtype=next_tokens.dtype, device=device)
         next_beam_indices = torch.zeros((batch_size, self.group_size), dtype=next_indices.dtype, device=device)
 
-        if eos_token_id is not None and not isinstance(eos_token_id, "torch.Tensor"):
+        if eos_token_id is not None and not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id)
@@ -335,7 +335,7 @@ class BeamSearchScorer(BeamScorer):
     ) -> Tuple["torch.LongTensor"]:
         batch_size = len(self._beam_hyps) // self.num_beam_groups
 
-        if eos_token_id is not None and not isinstance(eos_token_id, "torch.Tensor"):
+        if eos_token_id is not None and not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id)
@@ -566,7 +566,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
         next_beam_tokens = torch.zeros((batch_size, self.num_beams), dtype=next_tokens.dtype, device=device)
         next_beam_indices = torch.zeros((batch_size, self.num_beams), dtype=next_indices.dtype, device=device)
 
-        if eos_token_id is not None and not isinstance(eos_token_id, "torch.Tensor"):
+        if eos_token_id is not None and not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id)
@@ -808,7 +808,7 @@ class ConstrainedBeamSearchScorer(BeamScorer):
     ) -> Tuple["torch.LongTensor"]:
         batch_size = len(self._beam_hyps)
 
-        if eos_token_id is not None and not isinstance(eos_token_id, "torch.Tensor"):
+        if eos_token_id is not None and not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id)

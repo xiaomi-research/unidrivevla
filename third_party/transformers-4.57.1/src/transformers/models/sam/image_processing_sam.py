@@ -657,15 +657,15 @@ class SamImageProcessor(BaseImageProcessor):
         requires_backends(self, ["torch"])
         pad_size = self.pad_size if pad_size is None else pad_size
         target_image_size = (pad_size["height"], pad_size["width"])
-        if isinstance(original_sizes, ("torch.Tensor", np.ndarray)):
+        if isinstance(original_sizes, (torch.Tensor, np.ndarray)):
             original_sizes = original_sizes.tolist()
-        if isinstance(reshaped_input_sizes, ("torch.Tensor", np.ndarray)):
+        if isinstance(reshaped_input_sizes, (torch.Tensor, np.ndarray)):
             reshaped_input_sizes = reshaped_input_sizes.tolist()
         output_masks = []
         for i, original_size in enumerate(original_sizes):
             if isinstance(masks[i], np.ndarray):
                 masks[i] = torch.from_numpy(masks[i])
-            elif not isinstance(masks[i], "torch.Tensor"):
+            elif not isinstance(masks[i], torch.Tensor):
                 raise TypeError("Input masks should be a list of `torch.tensors` or a list of `np.ndarray`")
             interpolated_mask = F.interpolate(masks[i], target_image_size, mode="bilinear", align_corners=False)
             interpolated_mask = interpolated_mask[..., : reshaped_input_sizes[i][0], : reshaped_input_sizes[i][1]]

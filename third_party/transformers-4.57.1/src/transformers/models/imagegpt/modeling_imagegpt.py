@@ -156,7 +156,7 @@ class ImageGPTLayerNorm(nn.Module):
     def __init__(self, hidden_size: Tuple[int], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
-        self.weight = nn.Parameter("torch.Tensor"(hidden_size))
+        self.weight = nn.Parameter(torch.Tensor(hidden_size))
 
     def forward(self, tensor: "torch.Tensor") -> "torch.Tensor":
         # input is not mean centered
@@ -723,7 +723,7 @@ class ImageGPTModel(ImageGPTPreTrainedModel):
                 # Ensure that attention_mask is always on the same device as hidden_states
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(hidden_states.device)
-                if isinstance(head_mask, "torch.Tensor"):
+                if isinstance(head_mask, torch.Tensor):
                     head_mask = head_mask.to(hidden_states.device)
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)

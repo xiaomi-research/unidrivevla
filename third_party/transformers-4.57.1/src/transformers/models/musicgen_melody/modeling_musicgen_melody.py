@@ -632,7 +632,7 @@ class MusicgenMelodyDecoder(MusicgenMelodyPreTrainedModel):
                 past_key_values_length,
             )
         elif self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             # Other attention flavors support in-built causal (when `mask is None`)
             # while we need to create our specific block mask regardless
@@ -1981,7 +1981,7 @@ class MusicgenMelodyForConditionalGeneration(PreTrainedModel, GenerationMixin):
         # soft-prompting or in multimodal implementations built on top of decoder-only language models.
         batch_size = 1
         for value in model_kwargs.values():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 batch_size = value.shape[0]
                 break
         return torch.ones((batch_size, 1), dtype=torch.long, device=self.device) * bos_token_id

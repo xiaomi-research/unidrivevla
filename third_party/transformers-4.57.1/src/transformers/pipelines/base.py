@@ -93,7 +93,7 @@ def no_collate_fn(items):
 
 def _pad(items, key, padding_value, padding_side):
     batch_size = len(items)
-    if isinstance(items[0][key], "torch.Tensor"):
+    if isinstance(items[0][key], torch.Tensor):
         # Others include `attention_mask` etc...
         shape = items[0][key].shape
         dim = len(shape)
@@ -1279,7 +1279,7 @@ class Pipeline(_ScikitCompat, PushToHubMixin):
             return [self._ensure_tensor_on_device(item, device) for item in inputs]
         elif isinstance(inputs, tuple):
             return tuple(self._ensure_tensor_on_device(item, device) for item in inputs)
-        elif isinstance(inputs, "torch.Tensor"):
+        elif isinstance(inputs, torch.Tensor):
             return inputs.to(device)
         else:
             return inputs
