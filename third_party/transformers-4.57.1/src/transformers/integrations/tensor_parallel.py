@@ -440,7 +440,7 @@ class GatherParallel(TensorParallelLayer):
 
     @staticmethod
     def _prepare_output_fn(output_layouts, use_local_output, mod, outputs, device_mesh):
-        if isinstance(outputs, "torch.Tensor"):
+        if isinstance(outputs, torch.Tensor):
             dist.all_reduce(outputs, op=dist.ReduceOp.SUM, async_op=False)
         else:
             dist.all_reduce(outputs[0], op=dist.ReduceOp.SUM, async_op=False)
@@ -980,7 +980,7 @@ def replace_state_dict_local_with_dtensor(
     Replaces all tensors that were sharded with `local_*` strategy with DTensor to make determining their proper size possible.
     """
     for key, value in state_dict.items():
-        if isinstance(value, "torch.Tensor") and not isinstance(value, DTensor):
+        if isinstance(value, torch.Tensor) and not isinstance(value, DTensor):
             state_Dict[key] = convert_local_tensor_to_dtensor(value, key, device_mesh, tp_plan)
     return state_dict
 

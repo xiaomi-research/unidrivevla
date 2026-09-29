@@ -147,7 +147,9 @@ def fix_file(file_path: str) -> Tuple[bool, List[str]]:
 
 def main():
     """Main function to fix all files."""
-    base_path = "/high_perf_store3/world-model/yongkangli/ABCDEFG_NISHIDASHABI/A/B/UniDriveVLA/Bench2Drive/transformers-4.57.1/src/transformers"
+    base_path = os.environ.get(
+        "TRANSFORMERS_SRC", str(Path(__file__).resolve().parent)
+    )
     
     print("Searching for Python files with subscripted built-in types...")
     files_with_issues = find_python_files_with_subscripted_types(base_path)

@@ -420,15 +420,15 @@ def custom_train_detector(
         cfg.get("momentum_config", None),
     )
 
-    # LoRA Merge Hook: auto-register when lora_cfg is set in the planning head.
-    # Runs after_run on rank-0: merges LoRA adapter into base weights and saves
-    # a single merged HuggingFace checkpoint (no separate adapter files).
+    # Export one merged HuggingFace VLM checkpoint after PEFT training.
     _planning_head_cfg = cfg.get('model', {}).get('planning_head', {})
     if _planning_head_cfg.get('lora_cfg') is not None:
         from .lora_merge_hook import LoRAMergeHook
         lora_hook = LoRAMergeHook()
         runner.register_hook(lora_hook, priority='VERY_LOW')
-        logger.info("[LoRA] Registered LoRAMergeHook → will merge adapter into LLM before checkpoint save")
+        logger.info(
+            "[PEFT] Registered LoRAMergeHook -> will export merged VLM after training"
+        )
 
     # register profiler hook
     # trace_config = dict(type='tb_trace', dir_name='work_dir')

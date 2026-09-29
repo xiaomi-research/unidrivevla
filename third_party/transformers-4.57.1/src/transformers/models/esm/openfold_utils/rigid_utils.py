@@ -366,7 +366,7 @@ class Rotation:
         Returns:
             The product
         """
-        if not (isinstance(right, "torch.Tensor")):
+        if not (isinstance(right, torch.Tensor)):
             raise TypeError("The other multiplicand must be a Tensor")
 
         if self._rot_mats is not None:
@@ -846,7 +846,7 @@ class Rigid:
         Returns:
             The product
         """
-        if not (isinstance(right, "torch.Tensor")):
+        if not (isinstance(right, torch.Tensor)):
             raise TypeError("The other multiplicand must be a Tensor")
 
         new_rots = self._rots * right

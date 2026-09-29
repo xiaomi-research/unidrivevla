@@ -143,7 +143,7 @@ class Qwen2_5OmniPreTrainedModelForConditionalGeneration(Qwen2_5OmniPreTrainedMo
         llm_grid_w = grid_ws[vision_idx] // spatial_merge_size
         h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(len(t_index), -1, llm_grid_w).flatten()
         w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(len(t_index), llm_grid_h, -1).flatten()
-        t_index = "torch.Tensor"(t_index).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten().long()
+        t_index = torch.Tensor(t_index).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten().long()
         _llm_pos_ids = torch.stack([t_index, h_index, w_index])
         llm_pos_ids_list.append(_llm_pos_ids + start_idx)  # + 1 ) # 12.09 by malinhan
         llm_pos_ids = torch.cat(llm_pos_ids_list, dim=1)

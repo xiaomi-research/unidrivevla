@@ -60,9 +60,20 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 def _unwrap_lm(language_model):
-    if hasattr(language_model, "base_model"):
-        return language_model.base_model.model
-    return language_model
+    get_base_model = getattr(language_model, "get_base_model", None)
+    if callable(get_base_model):
+        try:
+            base_model = get_base_model()
+            if base_model is not None:
+                return base_model
+        except Exception:
+            pass
+
+    base_model = getattr(language_model, "base_model", None)
+    if base_model is not None and base_model is not language_model:
+        return getattr(base_model, "model", base_model)
+
+    return getattr(language_model, "model", language_model)
 
 
 def compute_layer_complete(
@@ -150,6 +161,10 @@ def compute_layer_complete(
                     f"mask(Q,K)=({attention_mask.shape[-2]},{attention_mask.shape[-1]}) "
                     f"but Q,K=({query_states.shape[2]},{key_states.shape[2]})."
                 )
+            attention_mask = attention_mask.to(
+                device=query_states.device,
+                dtype=query_states.dtype,
+            )
 
         num_kv_heads = base_lm.layers[layer_idx].self_attn.config.num_key_value_heads
         n_rep = num_heads // num_kv_heads
@@ -252,9 +267,15 @@ class Qwen3VLWithExpertModel(nn.Module):
         pretrained_path,
         precision: Literal["bfloat16", "float32"] = "bfloat16",
         train_vlm: bool = False,
+        shared_decoder: bool = False,
         lora_cfg: Optional[Dict[str, Any]] = None,
+        peft_cfg: Optional[Dict[str, Any]] = None,
+        visual_lora_cfg: Optional[Dict[str, Any]] = None,
+        visual_wasp_cfg: Optional[Dict[str, Any]] = None,
+        visual_projector_wasp_cfg: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
+        self.shared_decoder = bool(shared_decoder)
 
         vlm_config_hf = CONFIG_MAPPING["qwen3_vl"]()
         vlm_config_hf.text_config.hidden_size = vlm_config.hidden_size
@@ -332,54 +353,278 @@ class Qwen3VLWithExpertModel(nn.Module):
 
         self.qwen3_vl.load_state_dict(state_dict, strict=False)
 
-        perception_expert_config_hf = CONFIG_MAPPING["qwen3_vl_text"]()
-        perception_expert_config_hf.hidden_size = perception_expert_config.hidden_size
-        perception_expert_config_hf.intermediate_size = perception_expert_config.intermediate_size
-        perception_expert_config_hf.num_attention_heads = perception_expert_config.num_attention_heads
-        perception_expert_config_hf.num_hidden_layers = vlm_config.num_hidden_layers
-        perception_expert_config_hf.num_key_value_heads = perception_expert_config.num_key_value_heads
-        perception_expert_config_hf.max_position_embeddings = self.qwen3_vl.config.text_config.max_position_embeddings
-        perception_expert_config_hf.rope_scaling = self.qwen3_vl.config.text_config.rope_scaling
-        self.qwen3_perception_expert = Qwen3VLTextModel(config=perception_expert_config_hf)
-        self.qwen3_perception_expert.embed_tokens = None
+        if not self.shared_decoder:
+            perception_expert_config_hf = CONFIG_MAPPING["qwen3_vl_text"]()
+            perception_expert_config_hf.hidden_size = perception_expert_config.hidden_size
+            perception_expert_config_hf.intermediate_size = perception_expert_config.intermediate_size
+            perception_expert_config_hf.num_attention_heads = perception_expert_config.num_attention_heads
+            perception_expert_config_hf.num_hidden_layers = vlm_config.num_hidden_layers
+            perception_expert_config_hf.num_key_value_heads = perception_expert_config.num_key_value_heads
+            perception_expert_config_hf.max_position_embeddings = self.qwen3_vl.config.text_config.max_position_embeddings
+            perception_expert_config_hf.rope_scaling = self.qwen3_vl.config.text_config.rope_scaling
+            self.qwen3_perception_expert = Qwen3VLTextModel(config=perception_expert_config_hf)
+            self.qwen3_perception_expert.embed_tokens = None
 
-        action_expert_config_hf = CONFIG_MAPPING["qwen3_vl_text"]()
-        action_expert_config_hf.head_dim=action_expert_config.head_dim
-        action_expert_config_hf.hidden_size=action_expert_config.hidden_size
-        action_expert_config_hf.intermediate_size=action_expert_config.intermediate_size
-        action_expert_config_hf.num_attention_heads=action_expert_config.num_attention_heads
-        action_expert_config_hf.num_hidden_layers=vlm_config.num_hidden_layers
-        action_expert_config_hf.num_key_value_heads=action_expert_config.num_key_value_heads
-        action_expert_config_hf.max_position_embeddings = self.qwen3_vl.config.text_config.max_position_embeddings
-        action_expert_config_hf.rope_scaling = self.qwen3_vl.config.text_config.rope_scaling
-        self.qwen3_action_expert = Qwen3VLTextModel(config=action_expert_config_hf)
+            action_expert_config_hf = CONFIG_MAPPING["qwen3_vl_text"]()
+            action_expert_config_hf.head_dim=action_expert_config.head_dim
+            action_expert_config_hf.hidden_size=action_expert_config.hidden_size
+            action_expert_config_hf.intermediate_size=action_expert_config.intermediate_size
+            action_expert_config_hf.num_attention_heads=action_expert_config.num_attention_heads
+            action_expert_config_hf.num_hidden_layers=vlm_config.num_hidden_layers
+            action_expert_config_hf.num_key_value_heads=action_expert_config.num_key_value_heads
+            action_expert_config_hf.max_position_embeddings = self.qwen3_vl.config.text_config.max_position_embeddings
+            action_expert_config_hf.rope_scaling = self.qwen3_vl.config.text_config.rope_scaling
+            self.qwen3_action_expert = Qwen3VLTextModel(config=action_expert_config_hf)
+            self.qwen3_action_expert.embed_tokens = None
 
-        self.qwen3_action_expert.embed_tokens = None
+        if lora_cfg is not None and peft_cfg is not None:
+            raise ValueError("Use only one of lora_cfg or peft_cfg, not both.")
+        if visual_lora_cfg is not None and visual_projector_wasp_cfg is not None:
+            raise ValueError(
+                "visual_lora_cfg and visual_projector_wasp_cfg are mutually "
+                "exclusive because both may target visual projectors."
+            )
 
         self._lora_enabled = False
+        self._language_lora_enabled = False
+        self._language_wasp_enabled = False
+        self._visual_lora_enabled = False
+        self._visual_wasp_enabled = False
+        self._visual_projector_wasp_enabled = False
+        self._language_adapter_param_ids = set()
+        self._visual_lora_param_ids = set()
+        self._visual_wasp_param_ids = set()
+        self._visual_projector_wasp_param_ids = set()
+
+        active_language_peft_cfg = peft_cfg
         if lora_cfg is not None:
+            active_language_peft_cfg = dict(lora_cfg)
+            active_language_peft_cfg.setdefault("type", "lora")
+
+        if active_language_peft_cfg is not None:
+            language_peft_options = dict(active_language_peft_cfg)
+            language_peft_type = str(
+                language_peft_options.pop("type", "lora")
+            ).lower()
+            if language_peft_type == "lora":
+                try:
+                    from peft import LoraConfig, get_peft_model
+                except ImportError as exc:
+                    raise ImportError(
+                        "peft is required for LoRA training. "
+                        "Install it with: pip install peft"
+                    ) from exc
+                lora_config = LoraConfig(**language_peft_options)
+                self.qwen3_vl.model.language_model = get_peft_model(
+                    self.qwen3_vl.model.language_model, lora_config
+                )
+                self.qwen3_vl.model.language_model.print_trainable_parameters()
+                self._language_lora_enabled = True
+            elif language_peft_type == "wasp":
+                from .wasp import apply_wasp
+                replaced = apply_wasp(
+                    self.qwen3_vl.model.language_model,
+                    language_peft_options,
+                )
+                expected_layers = language_peft_options.get(
+                    "expected_num_layers"
+                )
+                if (
+                    expected_layers is not None
+                    and replaced != int(expected_layers)
+                ):
+                    raise RuntimeError(
+                        "Language WASP target count mismatch: "
+                        f"expected {expected_layers}, replaced {replaced}."
+                    )
+                self._language_wasp_enabled = True
+            else:
+                raise ValueError(
+                    "peft_cfg only supports type='lora' or type='wasp' in "
+                    f"the CoC pipeline; got {language_peft_type!r}."
+                )
+            self._lora_enabled = True
+            self._language_adapter_param_ids = {
+                id(param)
+                for param in self.qwen3_vl.model.language_model.parameters()
+                if param.requires_grad
+            }
+            if not self._language_adapter_param_ids:
+                raise RuntimeError(
+                    "Language PEFT created no trainable parameters; check "
+                    "target_modules."
+                )
+
+        if visual_lora_cfg is not None:
+            visual_lora_options = dict(visual_lora_cfg)
+            visual_peft_type = str(
+                visual_lora_options.pop("type", "lora")
+            ).lower()
+            if visual_peft_type != "lora":
+                raise ValueError(
+                    "visual_lora_cfg only supports type='lora'; "
+                    f"got {visual_peft_type!r}."
+                )
             try:
                 from peft import LoraConfig, get_peft_model
-            except ImportError:
+            except ImportError as exc:
                 raise ImportError(
-                    "peft is required for LoRA training. "
+                    "peft is required for visual LoRA training. "
                     "Install it with: pip install peft"
-                )
-            lora_config = LoraConfig(**lora_cfg)
-            self.qwen3_vl.model.language_model = get_peft_model(
-                self.qwen3_vl.model.language_model, lora_config
-            )
-            self.qwen3_vl.model.language_model.print_trainable_parameters()
-            self._lora_enabled = True
+                ) from exc
 
-        if not train_vlm:
-            for p in self.qwen3_vl.parameters():
-                p.requires_grad = False
+            visual = getattr(self.qwen3_vl.model, "visual", None)
+            if visual is None:
+                raise AttributeError(
+                    "Qwen3-VL model has no visual module for visual LoRA."
+                )
+            self.qwen3_vl.model.visual = get_peft_model(
+                visual, LoraConfig(**visual_lora_options)
+            )
+            self.qwen3_vl.model.visual.print_trainable_parameters()
+            self._visual_lora_param_ids = {
+                id(param)
+                for param in self.qwen3_vl.model.visual.parameters()
+                if param.requires_grad
+            }
+            if not self._visual_lora_param_ids:
+                raise RuntimeError(
+                    "visual_lora_cfg created no trainable parameters; "
+                    "check target_modules."
+                )
+            self._lora_enabled = True
+            self._visual_lora_enabled = True
+
+        if visual_wasp_cfg is not None:
+            visual_wasp_options = dict(visual_wasp_cfg)
+            visual_peft_type = str(
+                visual_wasp_options.pop("type", "wasp")
+            ).lower()
+            if visual_peft_type != "wasp":
+                raise ValueError(
+                    "visual_wasp_cfg only supports type='wasp'; "
+                    f"got {visual_peft_type!r}."
+                )
+
+            visual = getattr(self.qwen3_vl.model, "visual", None)
+            if visual is None:
+                raise AttributeError(
+                    "Qwen3-VL model has no visual module for visual WASP."
+                )
+            visual_core = _unwrap_lm(visual)
+            visual_blocks = getattr(visual_core, "blocks", None)
+            if visual_blocks is None:
+                raise AttributeError(
+                    "Qwen3-VL visual module has no encoder blocks for WASP."
+                )
+
+            from .wasp import apply_wasp
+            replaced = apply_wasp(visual_blocks, visual_wasp_options)
+            expected_layers = visual_wasp_options.get("expected_num_layers")
+            if expected_layers is not None and replaced != int(expected_layers):
+                raise RuntimeError(
+                    "Visual WASP target count mismatch: "
+                    f"expected {expected_layers}, replaced {replaced}."
+                )
+            self._visual_wasp_param_ids = {
+                id(param)
+                for param in visual_blocks.parameters()
+                if param.requires_grad
+            }
+            if not self._visual_wasp_param_ids:
+                raise RuntimeError(
+                    "visual_wasp_cfg created no trainable parameters."
+                )
+            self._lora_enabled = True
+            self._visual_wasp_enabled = True
+
+        if visual_projector_wasp_cfg is not None:
+            projector_wasp_options = dict(visual_projector_wasp_cfg)
+            projector_peft_type = str(
+                projector_wasp_options.pop("type", "wasp")
+            ).lower()
+            if projector_peft_type != "wasp":
+                raise ValueError(
+                    "visual_projector_wasp_cfg only supports type='wasp'; "
+                    f"got {projector_peft_type!r}."
+                )
+
+            visual = getattr(self.qwen3_vl.model, "visual", None)
+            if visual is None:
+                raise AttributeError(
+                    "Qwen3-VL model has no visual module for projector WASP."
+                )
+            visual_core = _unwrap_lm(visual)
+            projector_modules = self._get_visual_projector_modules(visual_core)
+            if not projector_modules:
+                raise AttributeError(
+                    "Qwen3-VL visual module has no merger/deepstack projectors "
+                    "for WASP."
+                )
+
+            from .wasp import apply_wasp
+            replaced = sum(
+                apply_wasp(module, projector_wasp_options)
+                for module in projector_modules
+            )
+            expected_layers = projector_wasp_options.get(
+                "expected_num_layers"
+            )
+            if expected_layers is not None and replaced != int(expected_layers):
+                raise RuntimeError(
+                    "Visual projector WASP target count mismatch: "
+                    f"expected {expected_layers}, replaced {replaced}."
+                )
+            self._visual_projector_wasp_param_ids = {
+                id(param)
+                for module in projector_modules
+                for param in module.parameters()
+                if param.requires_grad
+            }
+            if not self._visual_projector_wasp_param_ids:
+                raise RuntimeError(
+                    "visual_projector_wasp_cfg created no trainable parameters."
+                )
+            self._lora_enabled = True
+            self._visual_projector_wasp_enabled = True
+
+        use_mixed_visual_peft = (
+            visual_lora_cfg is not None
+            or visual_wasp_cfg is not None
+            or visual_projector_wasp_cfg is not None
+        )
+
+        def apply_trainability_policy():
+            if not train_vlm:
+                self.qwen3_vl.requires_grad_(False)
+                return
+
+            if not use_mixed_visual_peft:
+                # Preserve original CoC LoRA: LLM LoRA plus full visual tuning.
+                return
+
+            self.qwen3_vl.requires_grad_(False)
+            for param in self.qwen3_vl.model.language_model.parameters():
+                if id(param) in self._language_adapter_param_ids:
+                    param.requires_grad_(True)
+
+            visual = self.qwen3_vl.model.visual
+            visual_adapter_ids = (
+                self._visual_lora_param_ids
+                | self._visual_wasp_param_ids
+                | self._visual_projector_wasp_param_ids
+            )
+            for param in visual.parameters():
+                if id(param) in visual_adapter_ids:
+                    param.requires_grad_(True)
+
+        apply_trainability_policy()
 
         _vlm_config = self.qwen3_vl.config
-        assert _vlm_config.text_config.num_hidden_layers == self.qwen3_perception_expert.config.num_hidden_layers == self.qwen3_action_expert.config.num_hidden_layers
+        assert _vlm_config.text_config.num_hidden_layers == self.perception_decoder.config.num_hidden_layers == self.action_decoder.config.num_hidden_layers
 
         self.processor = AutoProcessor.from_pretrained(pretrained_path)
+        self._last_image_grid_hw = None
         tokenizer = self.processor.tokenizer
 
         existing_vocab = tokenizer.get_vocab()
@@ -388,8 +633,26 @@ class Qwen3VLWithExpertModel(nn.Module):
             tokenizer.add_tokens(tokens_to_add)
             self.qwen3_vl.resize_token_embeddings(len(tokenizer))
 
-        if hasattr(self.qwen3_action_expert, "_init_weights"):
+        # resize_token_embeddings() may recreate the embedding parameter.
+        apply_trainability_policy()
+
+        if use_mixed_visual_peft:
+            print(
+                "[Mixed Visual PEFT] "
+                f"language_lora={self._language_lora_enabled}, "
+                f"language_wasp={self._language_wasp_enabled}, "
+                f"visual_lora={self._visual_lora_enabled}, "
+                f"visual_wasp={self._visual_wasp_enabled}, "
+                "visual_projector_wasp="
+                f"{self._visual_projector_wasp_enabled}; "
+                "all corresponding base weights and token embeddings are frozen"
+            )
+
+        if not self.shared_decoder and hasattr(self.qwen3_action_expert, "_init_weights"):
             self.qwen3_action_expert.apply(self.qwen3_action_expert._init_weights)
+
+        architecture = "shared-weight decoder" if self.shared_decoder else "Mixture-of-Transformers"
+        print(f"[Decoder Architecture] {architecture}")
 
         self.to_bfloat16_for_selected_params(precision)
 
@@ -401,13 +664,90 @@ class Qwen3VLWithExpertModel(nn.Module):
     def vlm_base(self):
         return self.qwen3_vl
 
+    @property
+    def perception_decoder(self):
+        if self.shared_decoder:
+            return _unwrap_lm(self.qwen3_vl.language_model)
+        return self.qwen3_perception_expert
+
+    @property
+    def action_decoder(self):
+        if self.shared_decoder:
+            return _unwrap_lm(self.qwen3_vl.language_model)
+        return self.qwen3_action_expert
+
+    @staticmethod
+    def _get_visual_projector_modules(visual_core: nn.Module):
+        modules = []
+        merger = getattr(visual_core, "merger", None)
+        if merger is not None:
+            modules.append(merger)
+        deepstack_mergers = getattr(
+            visual_core, "deepstack_merger_list", None
+        )
+        if deepstack_mergers is not None:
+            modules.append(deepstack_mergers)
+        return modules
+
+    def visual_wasp_regularization(self):
+        if not self._visual_wasp_enabled:
+            return None
+        from .wasp import compute_wasp_regularization
+        visual_core = _unwrap_lm(self.qwen3_vl.model.visual)
+        visual_blocks = getattr(visual_core, "blocks", None)
+        if visual_blocks is None:
+            return None
+        return compute_wasp_regularization(visual_blocks)
+
+    def visual_projector_wasp_regularization(self):
+        if not self._visual_projector_wasp_enabled:
+            return None
+        from .wasp import compute_wasp_regularization
+        visual_core = _unwrap_lm(self.qwen3_vl.model.visual)
+        losses = [
+            compute_wasp_regularization(module)
+            for module in self._get_visual_projector_modules(visual_core)
+        ]
+        losses = [loss for loss in losses if loss is not None]
+        if not losses:
+            return None
+        return torch.stack(losses).sum()
+
+    def merge_and_save_lora(self, save_dir: str) -> None:
+        os.makedirs(save_dir, exist_ok=True)
+        self.merge_lora()
+        self.qwen3_vl.save_pretrained(save_dir)
+        self.processor.save_pretrained(save_dir)
+
     def merge_lora(self) -> None:
         if not self._lora_enabled:
             return
 
-        merged_lm = self.qwen3_vl.model.language_model.merge_and_unload()
-        self.qwen3_vl.model.language_model = merged_lm
+        if self._language_lora_enabled:
+            merged_lm = self.qwen3_vl.model.language_model.merge_and_unload()
+            self.qwen3_vl.model.language_model = merged_lm
+        elif self._language_wasp_enabled:
+            from .wasp import merge_wasp
+            merge_wasp(self.qwen3_vl.model.language_model)
+
+        if self._visual_lora_enabled:
+            merged_visual = self.qwen3_vl.model.visual.merge_and_unload()
+            self.qwen3_vl.model.visual = merged_visual
+
+        if self._visual_wasp_enabled or self._visual_projector_wasp_enabled:
+            from .wasp import merge_wasp
+            merge_wasp(self.qwen3_vl.model.visual)
+
         self._lora_enabled = False
+        self._language_lora_enabled = False
+        self._language_wasp_enabled = False
+        self._visual_lora_enabled = False
+        self._visual_wasp_enabled = False
+        self._visual_projector_wasp_enabled = False
+        self._language_adapter_param_ids.clear()
+        self._visual_lora_param_ids.clear()
+        self._visual_wasp_param_ids.clear()
+        self._visual_projector_wasp_param_ids.clear()
 
     def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):
         if precision == "bfloat16":
@@ -470,30 +810,41 @@ class Qwen3VLWithExpertModel(nn.Module):
 
         flat_imgs = imgs.view(-1, C, H, W)
 
-        pil_images = []
-        for i in range(flat_imgs.shape[0]):
-            img_np = flat_imgs[i].permute(1, 2, 0).cpu().numpy()
-            pil_images.append(Image.fromarray(img_np))
-
+        flat_imgs_hwc = flat_imgs.permute(0, 2, 3, 1).cpu().numpy()
+        pil_images = [Image.fromarray(img_np) for img_np in flat_imgs_hwc]
         all_embs = []
         all_grids = []
+        all_feature_lens = []
+        first_image_grid_hw = None
+        merge_size = self.qwen3_vl.visual.spatial_merge_size
         all_deepstack_features = [[] for _ in range(len(self.qwen3_vl.config.vision_config.deepstack_visual_indexes))]
 
+        inputs = self.processor.image_processor(
+            images=pil_images, return_tensors="pt", do_resize=False
+        )
+        all_pixel_values = inputs["pixel_values"]
+        all_grid_cpu = inputs["image_grid_thw"]
+        patch_counts = all_grid_cpu.prod(dim=1).tolist()
+        patch_offset = 0
+
         for i in range(0, len(pil_images), chunk_size):
-            chunk = pil_images[i : i + chunk_size]
-
-            chunk_resized = []
-            for img in chunk:
-                w, h = img.size
-                img = img
-                chunk_resized.append(img)
-
-            inputs = self.processor.image_processor(
-                images=chunk_resized, return_tensors="pt", do_resize=False
+            chunk_end = min(i + chunk_size, len(pil_images))
+            chunk_patch_count = sum(patch_counts[i:chunk_end])
+            next_patch_offset = patch_offset + chunk_patch_count
+            pix = all_pixel_values[patch_offset:next_patch_offset].to(
+                self.qwen3_vl.device, self.qwen3_vl.dtype
             )
-
-            pix = inputs["pixel_values"].to(self.qwen3_vl.device, self.qwen3_vl.dtype)
-            grid = inputs["image_grid_thw"].to(self.qwen3_vl.device)
+            grid_cpu = all_grid_cpu[i:chunk_end]
+            patch_offset = next_patch_offset
+            if first_image_grid_hw is None:
+                first_image_grid_hw = tuple(
+                    int(value) for value in grid_cpu[0, 1:3].tolist()
+                )
+            chunk_feature_lens = (
+                (grid_cpu[:, 1] * grid_cpu[:, 2]) // (merge_size * merge_size)
+            )
+            all_feature_lens.extend(chunk_feature_lens.tolist())
+            grid = grid_cpu.to(self.qwen3_vl.device)
 
             embs_list, deepstack_embs, raw_feature_list = self.qwen3_vl.visual(
                 hidden_states=pix, grid_thw=grid
@@ -516,14 +867,13 @@ class Qwen3VLWithExpertModel(nn.Module):
         image_features = torch.cat(all_embs, dim=0)
         all_grids = torch.cat(all_grids, dim=0)
 
-        merge_size = self.qwen3_vl.visual.spatial_merge_size
-        feature_lens = (all_grids[:, 1] * all_grids[:, 2]) // (merge_size * merge_size)
+        self._last_image_grid_hw = first_image_grid_hw
 
         deepstack_features = [torch.cat(ds_list, dim=0) for ds_list in all_deepstack_features]
 
         raw_features = [torch.cat(raw_list, dim=0) for raw_list in all_raw_features]
 
-        return image_features, feature_lens.tolist(), all_grids, deepstack_features, raw_features
+        return image_features, all_feature_lens, all_grids, deepstack_features, raw_features
 
     def forward(
         self,
@@ -557,7 +907,7 @@ class Qwen3VLWithExpertModel(nn.Module):
             suffix_output = None
 
         elif len(inputs_embeds) == 3 and inputs_embeds[0] is None and inputs_embeds[2] is None:
-            middle_output = self.qwen3_perception_expert.forward(
+            middle_output = self.perception_decoder.forward(
                 inputs_embeds=inputs_embeds[1],
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -570,7 +920,7 @@ class Qwen3VLWithExpertModel(nn.Module):
             suffix_output = None
 
         elif len(inputs_embeds) == 3 and inputs_embeds[0] is None and inputs_embeds[1] is None:
-            suffix_output = self.qwen3_action_expert.forward(
+            suffix_output = self.action_decoder.forward(
                 inputs_embeds=inputs_embeds[2],
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -583,12 +933,14 @@ class Qwen3VLWithExpertModel(nn.Module):
             prefix_past_key_values = None
 
         else:
-            models = [_unwrap_lm(self.qwen3_vl.language_model), self.qwen3_perception_expert, self.qwen3_action_expert]
+            perception_decoder = self.perception_decoder
+            action_decoder = self.action_decoder
+            models = [_unwrap_lm(self.qwen3_vl.language_model), perception_decoder, action_decoder]
             num_layers = self.qwen3_vl.config.text_config.num_hidden_layers
 
             use_gradient_checkpointing = (
-                hasattr(self.qwen3_action_expert, "gradient_checkpointing")
-                and self.qwen3_action_expert.gradient_checkpointing
+                hasattr(action_decoder, "gradient_checkpointing")
+                and action_decoder.gradient_checkpointing
                 and self.training
             )
 
@@ -603,8 +955,8 @@ class Qwen3VLWithExpertModel(nn.Module):
                         attention_mask,
                         position_ids,
                         self.qwen3_vl,
-                        self.qwen3_perception_expert,
-                        self.qwen3_action_expert,
+                        perception_decoder,
+                        action_decoder,
                         attn_implementation,
                         q_len_rounded,
                         deepstack_visual_embeds,
@@ -618,8 +970,8 @@ class Qwen3VLWithExpertModel(nn.Module):
                         attention_mask,
                         position_ids,
                         self.qwen3_vl,
-                        self.qwen3_perception_expert,
-                        self.qwen3_action_expert,
+                        perception_decoder,
+                        action_decoder,
                         attn_implementation=attn_implementation,
                         q_len_rounded=q_len_rounded,
                         deepstack_visual_embeds=deepstack_visual_embeds,

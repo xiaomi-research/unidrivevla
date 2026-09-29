@@ -701,7 +701,7 @@ class GPTJModel(GPTJPreTrainedModel):
                 # Ensure that attention_mask is always on the same device as hidden_states
                 if causal_mask is not None:
                     causal_mask = causal_mask.to(hidden_states.device)
-                if isinstance(head_mask, "torch.Tensor"):
+                if isinstance(head_mask, torch.Tensor):
                     head_mask = head_mask.to(hidden_states.device)
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -759,7 +759,7 @@ class GPTJModel(GPTJPreTrainedModel):
                 return attention_mask
             return None
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             return attention_mask
 
@@ -786,7 +786,7 @@ class GPTJModel(GPTJPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 

@@ -1,0 +1,162 @@
+{
+  "classes": [
+    "car",
+    "van",
+    "truck",
+    "bicycle",
+    "traffic_sign",
+    "traffic_cone",
+    "traffic_light",
+    "pedestrian",
+    "others"
+  ],
+  "counts": {
+    "bicycle": {
+      "eligible": 78294,
+      "full_valid": 89265,
+      "objects": 96012,
+      "within_distance": 84846
+    },
+    "car": {
+      "eligible": 7111987,
+      "full_valid": 8676245,
+      "objects": 13645117,
+      "within_distance": 10607243
+    },
+    "others": {
+      "eligible": 0,
+      "full_valid": 0,
+      "objects": 0,
+      "within_distance": 0
+    },
+    "pedestrian": {
+      "eligible": 25032,
+      "full_valid": 25061,
+      "objects": 30499,
+      "within_distance": 30470
+    },
+    "traffic_cone": {
+      "eligible": 0,
+      "full_valid": 0,
+      "objects": 557092,
+      "within_distance": 490552
+    },
+    "traffic_light": {
+      "eligible": 0,
+      "full_valid": 0,
+      "objects": 383827,
+      "within_distance": 359666
+    },
+    "traffic_sign": {
+      "eligible": 0,
+      "full_valid": 0,
+      "objects": 81822,
+      "within_distance": 74452
+    },
+    "truck": {
+      "eligible": 2265,
+      "full_valid": 2681,
+      "objects": 3348,
+      "within_distance": 2932
+    },
+    "van": {
+      "eligible": 2502,
+      "full_valid": 2850,
+      "objects": 3511,
+      "within_distance": 3163
+    }
+  },
+  "distance_threshold_m": 55.0,
+  "dynamic_classes": [
+    "bicycle",
+    "car",
+    "pedestrian",
+    "truck",
+    "van"
+  ],
+  "format_version": 1,
+  "horizon_seconds": 2.0,
+  "horizon_steps": 8,
+  "info_version": 15,
+  "max_samples_per_source": 200000,
+  "motion_frequency_hz": 4.0,
+  "n_init": 10,
+  "num_infos": 968710,
+  "num_modes": 6,
+  "observed_info_versions": [
+    15
+  ],
+  "observed_motion_frequencies_hz": [
+    4.0
+  ],
+  "observed_motion_horizons": [
+    8
+  ],
+  "output_anchor": "data/kmeans/lead_motion_6_4hz8step.npy",
+  "seed": 0,
+  "shape": [
+    9,
+    6,
+    8,
+    2
+  ],
+  "source_manifest": "external:data/lead/infos_4hz_full_motion4hz8_v15/lead_infos_train.pkl",
+  "static_classes": [
+    "others",
+    "traffic_cone",
+    "traffic_light",
+    "traffic_sign"
+  ],
+  "strategies": {
+    "bicycle": {
+      "inertia": 61175.078125,
+      "samples_used": 78294,
+      "source": "bicycle",
+      "strategy": "class"
+    },
+    "car": {
+      "inertia": 2483725.75,
+      "samples_used": 200000,
+      "source": "car",
+      "strategy": "class"
+    },
+    "others": {
+      "samples_used": 0,
+      "source": "others",
+      "strategy": "static_zero"
+    },
+    "pedestrian": {
+      "inertia": 2802.994384765625,
+      "samples_used": 25032,
+      "source": "pedestrian",
+      "strategy": "class"
+    },
+    "traffic_cone": {
+      "samples_used": 0,
+      "source": "traffic_cone",
+      "strategy": "static_zero"
+    },
+    "traffic_light": {
+      "samples_used": 0,
+      "source": "traffic_light",
+      "strategy": "static_zero"
+    },
+    "traffic_sign": {
+      "samples_used": 0,
+      "source": "traffic_sign",
+      "strategy": "static_zero"
+    },
+    "truck": {
+      "inertia": 16319.8037109375,
+      "samples_used": 2265,
+      "source": "truck",
+      "strategy": "class"
+    },
+    "van": {
+      "inertia": 18200.736328125,
+      "samples_used": 2502,
+      "source": "van",
+      "strategy": "class"
+    }
+  }
+}

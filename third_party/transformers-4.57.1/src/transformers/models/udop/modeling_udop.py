@@ -128,7 +128,7 @@ def get_visual_bbox(image_size=224, patch_size=16):
 
 
 def pad_sequence(seq, target_len, pad_value=0):
-    if isinstance(seq, "torch.Tensor"):
+    if isinstance(seq, torch.Tensor):
         n = seq.shape[0]
     else:
         n = len(seq)
@@ -383,7 +383,7 @@ class UdopDenseActDense(nn.Module):
         hidden_states = self.act(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if (
-            isinstance(self.wo.weight, "torch.Tensor")
+            isinstance(self.wo.weight, torch.Tensor)
             and hidden_states.dtype != self.wo.weight.dtype
             and self.wo.weight.dtype != torch.int8
         ):
@@ -412,7 +412,7 @@ class UdopDenseGatedActDense(nn.Module):
         # See https://github.com/huggingface/transformers/issues/20287
         # we also make sure the weights are not in `int8` in case users will force `_keep_in_fp32_modules` to be `None``
         if (
-            isinstance(self.wo.weight, "torch.Tensor")
+            isinstance(self.wo.weight, torch.Tensor)
             and hidden_states.dtype != self.wo.weight.dtype
             and self.wo.weight.dtype != torch.int8
         ):
@@ -1365,7 +1365,7 @@ class UdopStack(UdopPreTrainedModel):
                 return attention_mask
             return None
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             return attention_mask
 
@@ -1392,7 +1392,7 @@ class UdopStack(UdopPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 

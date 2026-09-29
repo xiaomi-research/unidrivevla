@@ -138,7 +138,7 @@ class MinLengthLogitsProcessor(LogitsProcessor):
         if not isinstance(min_length, int) or min_length < 0:
             raise ValueError(f"`min_length` has to be a non-negative integer, but is {min_length}")
 
-        if not isinstance(eos_token_id, "torch.Tensor"):
+        if not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id, device=device)
@@ -207,7 +207,7 @@ class MinNewTokensLengthLogitsProcessor(LogitsProcessor):
             if not isinstance(arg_value, int) or arg_value < 0:
                 raise ValueError(f"`{arg_name}` has to be a positive integer, but is {arg_value}")
 
-        if not isinstance(eos_token_id, "torch.Tensor"):
+        if not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id, device=device)
@@ -1340,7 +1340,7 @@ class NoBadWordsLogitsProcessor(SequenceBiasLogitsProcessor):
 
         # Filter EOS token from bad_words_ids
         if eos_token_id is not None:
-            if not isinstance(eos_token_id, "torch.Tensor"):
+            if not isinstance(eos_token_id, torch.Tensor):
                 if isinstance(eos_token_id, int):
                     eos_token_id = [eos_token_id]
                 eos_token_id = torch.tensor(eos_token_id)
@@ -1649,7 +1649,7 @@ class ForcedEOSTokenLogitsProcessor(LogitsProcessor):
     def __init__(self, max_length: int, eos_token_id: Union[int, List[int], "torch.Tensor"], device: str = "cpu"):
         self.max_length = max_length
 
-        if not isinstance(eos_token_id, "torch.Tensor"):
+        if not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id, device=device)
@@ -1766,7 +1766,7 @@ class ExponentialDecayLengthPenalty(LogitsProcessor):
         self.regulation_start = exponential_decay_length_penalty[0] + input_ids_seq_length
         self.regulation_factor = exponential_decay_length_penalty[1]
 
-        if not isinstance(eos_token_id, "torch.Tensor"):
+        if not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id)
@@ -1811,12 +1811,12 @@ class LogitNormalization(LogitsProcessor):
     >>> # By default, the scores are not normalized -- the sum of their exponentials is NOT a normalized probability
     >>> # distribution, summing to 1
     >>> outputs = model.generate(**inputs, return_dict_in_generate=True, output_scores=True)
-    >>> print(torch.allclose(torch.sum(torch.exp(outputs.scores[-1])), "torch.Tensor"((1.000,)), rtol=1e-4))
+    >>> print(torch.allclose(torch.sum(torch.exp(outputs.scores[-1])), torch.Tensor((1.000,)), rtol=1e-4))
     False
 
     >>> # Normalizing them may have a positive impact on beam methods, or when using the scores on your application
     >>> outputs = model.generate(**inputs, renormalize_logits=True, return_dict_in_generate=True, output_scores=True)
-    >>> print(torch.allclose(torch.sum(torch.exp(outputs.scores[-1])), "torch.Tensor"((1.000,)), rtol=1e-4))
+    >>> print(torch.allclose(torch.sum(torch.exp(outputs.scores[-1])), torch.Tensor((1.000,)), rtol=1e-4))
     True
     ```
     """
@@ -2366,7 +2366,7 @@ class BarkEosPrioritizerLogitsProcessor(LogitsProcessor):
     """
 
     def __init__(self, eos_token_id: Union[int, List[int], "torch.Tensor"], min_eos_p: float, device: str = "cpu"):
-        if not isinstance(eos_token_id, "torch.Tensor"):
+        if not isinstance(eos_token_id, torch.Tensor):
             if isinstance(eos_token_id, int):
                 eos_token_id = [eos_token_id]
             eos_token_id = torch.tensor(eos_token_id, device=device)

@@ -1955,7 +1955,7 @@ class GroundingDinoModel(GroundingDinoPreTrainedModel):
         self.encoder = GroundingDinoEncoder(config)
         self.decoder = GroundingDinoDecoder(config)
 
-        self.level_embed = nn.Parameter("torch.Tensor"(config.num_feature_levels, config.d_model))
+        self.level_embed = nn.Parameter(torch.Tensor(config.num_feature_levels, config.d_model))
 
         if config.two_stage:
             self.enc_output = nn.Linear(config.d_model, config.d_model)

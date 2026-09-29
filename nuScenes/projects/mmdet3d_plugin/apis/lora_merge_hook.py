@@ -1,12 +1,6 @@
-"""
-LoRA Merge Hook for UniDriveVLA
+"""Export a merged HuggingFace VLM checkpoint after PEFT training."""
 
-after_run (rank-0, synchronous):
-  At the end of training, merges the LoRA adapter into the live model weights
-  so that any subsequent mmcv checkpoint hook saves merged weights.
-  With DeepSpeed ZeRO-3, consolidates sharded params on all ranks first.
-"""
-
+import os.path as osp
 import torch.distributed as dist
 from mmcv.runner import HOOKS, Hook
 
@@ -22,13 +16,21 @@ def _get_planning_head(runner):
     return None
 
 
+def _get_export_dir(runner, planning_head):
+    configured = getattr(planning_head, "lora_merge_save_dir", None)
+    if configured:
+        return configured
+    return osp.join(runner.work_dir, "merged_hf", f"iter_{runner.iter + 1}")
+
+
 @HOOKS.register_module()
 class LoRAMergeHook(Hook):
     """
     Registered automatically by mmdet_train.py when `lora_cfg` is set in the
     planning_head config.
 
-    after_run: merges the LoRA adapter into the live model weights.
+    after_run: merges language/visual LoRA and visual WASP, then saves the
+    resulting Qwen3-VL model and processor on rank 0.
     """
 
     def _lora_enabled(self, runner) -> bool:
@@ -48,10 +50,13 @@ class LoRAMergeHook(Hook):
             return
 
         ph = _get_planning_head(runner)
-        if ph is None or not hasattr(ph, "merge_lora"):
+        if ph is None or (
+            not hasattr(ph, "merge_and_save_lora")
+            and not hasattr(ph, "merge_lora")
+        ):
             if rank == 0:
                 runner.logger.warning(
-                    "[LoRAMergeHook] Could not locate planning_head.merge_lora(). Skipping.")
+                    "[LoRAMergeHook] Could not locate a PEFT merge method. Skipping.")
             return
 
         # DeepSpeed ZeRO-3: consolidate sharded params on all ranks first
@@ -62,15 +67,30 @@ class LoRAMergeHook(Hook):
         except ImportError:
             pass
 
-        if _is_deepspeed:
+        if _is_deepspeed and hasattr(runner.model, "consolidate_16bit_params"):
             runner.model.consolidate_16bit_params()
             if is_dist:
                 dist.barrier()
+        elif _is_deepspeed and rank == 0:
+            runner.logger.info(
+                "[LoRAMergeHook] DeepSpeed engine does not expose "
+                "consolidate_16bit_params(); skipping explicit consolidation."
+            )
 
         if rank == 0:
-            runner.logger.info("[LoRAMergeHook] Merging LoRA adapter into live model weights...")
-            ph.merge_lora()
-            runner.logger.info("[LoRAMergeHook] In-memory LoRA merge complete.")
+            if hasattr(ph, "merge_and_save_lora"):
+                export_dir = _get_export_dir(runner, ph)
+                runner.logger.info(
+                    "[LoRAMergeHook] Exporting merged HuggingFace VLM checkpoint to %s ...",
+                    export_dir,
+                )
+                ph.merge_and_save_lora(export_dir)
+                runner.logger.info(
+                    "[LoRAMergeHook] Merged HuggingFace VLM export complete."
+                )
+            else:
+                runner.logger.info("[LoRAMergeHook] Falling back to in-memory PEFT merge.")
+                ph.merge_lora()
 
         if is_dist:
             dist.barrier()

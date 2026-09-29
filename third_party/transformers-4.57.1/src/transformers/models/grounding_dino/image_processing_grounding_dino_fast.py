@@ -206,7 +206,7 @@ def rgb_to_id(color):
     """
     Converts RGB color to unique ID.
     """
-    if isinstance(color, "torch.Tensor") and len(color.shape) == 3:
+    if isinstance(color, torch.Tensor) and len(color.shape) == 3:
         if color.dtype == torch.uint8:
             color = color.to(torch.int32)
         return color[:, :, 0] + 256 * color[:, :, 1] + 256 * 256 * color[:, :, 2]
@@ -279,7 +279,7 @@ def _scale_boxes(boxes, target_sizes):
     if isinstance(target_sizes, (list, tuple)):
         image_height = torch.tensor([i[0] for i in target_sizes])
         image_width = torch.tensor([i[1] for i in target_sizes])
-    elif isinstance(target_sizes, "torch.Tensor"):
+    elif isinstance(target_sizes, torch.Tensor):
         image_height, image_width = target_sizes.unbind(1)
     else:
         raise TypeError("`target_sizes` must be a list, tuple or torch.Tensor")

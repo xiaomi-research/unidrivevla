@@ -459,7 +459,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
                 return attention_mask
             return None
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             return attention_mask
 
@@ -486,7 +486,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 

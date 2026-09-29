@@ -570,7 +570,7 @@ class BitEncoder(nn.Module):
 
         layer_dropouts = [
             x.tolist()
-            for x in "torch.Tensor"(np.linspace(0, config.drop_path_rate, sum(config.depths))).split(config.depths)
+            for x in torch.Tensor(np.linspace(0, config.drop_path_rate, sum(config.depths))).split(config.depths)
         ]
 
         for stage_idx, (current_depth, current_hidden_size, layer_dropout) in enumerate(

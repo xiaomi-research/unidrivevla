@@ -30,7 +30,7 @@ def _fetch_dims(tree: Union[dict, list, tuple, "torch.Tensor"]) -> List[Tuple[in
     elif isinstance(tree, (list, tuple)):
         for t in tree:
             shapes.extend(_fetch_dims(t))
-    elif isinstance(tree, "torch.Tensor"):
+    elif isinstance(tree, torch.Tensor):
         shapes.append(tree.shape)
     else:
         raise TypeError("Not supported")
@@ -297,7 +297,7 @@ def chunk_layer(
                     x1[i : i + chunk_size] += x2
                 else:
                     x1[i : i + chunk_size] = x2
-        elif isinstance(output_chunk, "torch.Tensor"):
+        elif isinstance(output_chunk, torch.Tensor):
             if _add_into_out:
                 out[i : i + chunk_size] += output_chunk
             else:
@@ -376,7 +376,7 @@ class ChunkSizeTuner:
         min_chunk_size: int,
     ) -> int:
         consistent = True
-        arg_data: tuple = tree_map(lambda a: a.shape if isinstance(a, "torch.Tensor") else a, args, object)
+        arg_data: tuple = tree_map(lambda a: a.shape if isinstance(a, torch.Tensor) else a, args, object)
         if self.cached_arg_data is not None:
             # If args have changed shape/value, we need to re-tune
             assert len(self.cached_arg_data) == len(arg_data)

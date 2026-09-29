@@ -229,7 +229,7 @@ def _compute_dynamic_ntk_parameters(
     # seq_len: default to max_position_embeddings, e.g. at init time
     if seq_len is None:
         seq_len = max_position_embeddings
-    elif isinstance(seq_len, "torch.Tensor"):
+    elif isinstance(seq_len, torch.Tensor):
         seq_len = torch.maximum(
             seq_len,
             torch.tensor(max_position_embeddings, dtype=seq_len.dtype, device=seq_len.device),

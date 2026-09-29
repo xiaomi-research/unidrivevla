@@ -773,7 +773,7 @@ class GenerationMixin(ContinuousMixin):
         # soft-prompting or in multimodal implementations built on top of decoder-only language models.
         batch_size = 1
         for value in model_kwargs.values():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 batch_size = value.shape[0]
                 break
 
@@ -939,7 +939,7 @@ class GenerationMixin(ContinuousMixin):
                 if (
                     key != "cache_position"
                     and dict_to_expand[key] is not None
-                    and isinstance(dict_to_expand[key], "torch.Tensor")
+                    and isinstance(dict_to_expand[key], torch.Tensor)
                 ):
                     dict_to_expand[key] = dict_to_expand[key].repeat_interleave(expand_size, dim=0)
             return dict_to_expand
@@ -1254,7 +1254,7 @@ class GenerationMixin(ContinuousMixin):
             if generation_config.num_beams > 1:
                 if isinstance(generation_config._eos_token_tensor, list):
                     min_tokens_to_keep = len(generation_config._eos_token_tensor) + 1
-                elif isinstance(generation_config._eos_token_tensor, "torch.Tensor"):
+                elif isinstance(generation_config._eos_token_tensor, torch.Tensor):
                     min_tokens_to_keep = generation_config._eos_token_tensor.shape[0] + 1
                 else:
                     min_tokens_to_keep = 2
@@ -2072,7 +2072,7 @@ class GenerationMixin(ContinuousMixin):
                 return token
 
             device = device if device is not None else self.device
-            if isinstance(token, "torch.Tensor"):
+            if isinstance(token, torch.Tensor):
                 return token.to(device)
             return torch.tensor(token, device=device, dtype=torch.long)
 

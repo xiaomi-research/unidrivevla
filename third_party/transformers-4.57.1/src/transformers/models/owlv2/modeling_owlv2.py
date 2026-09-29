@@ -1503,7 +1503,7 @@ class Owlv2ForObjectDetection(Owlv2PreTrainedModel):
         >>> with torch.no_grad():
         ...     outputs = model.image_guided_detection(**inputs)
 
-        >>> target_sizes = "torch.Tensor"([image.size[::-1]])
+        >>> target_sizes = torch.Tensor([image.size[::-1]])
 
         >>> # Convert outputs (bounding boxes and class logits) to Pascal VOC format (xmin, ymin, xmax, ymax)
         >>> results = processor.post_process_image_guided_detection(

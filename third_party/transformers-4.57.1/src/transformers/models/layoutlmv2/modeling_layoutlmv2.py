@@ -531,11 +531,11 @@ class LayoutLMv2VisualBackbone(nn.Module):
         num_channels = len(self.cfg.MODEL.PIXEL_MEAN)
         self.register_buffer(
             "pixel_mean",
-            "torch.Tensor"(self.cfg.MODEL.PIXEL_MEAN).view(num_channels, 1, 1),
+            torch.Tensor(self.cfg.MODEL.PIXEL_MEAN).view(num_channels, 1, 1),
             persistent=False,
         )
         self.register_buffer(
-            "pixel_std", "torch.Tensor"(self.cfg.MODEL.PIXEL_STD).view(num_channels, 1, 1), persistent=False
+            "pixel_std", torch.Tensor(self.cfg.MODEL.PIXEL_STD).view(num_channels, 1, 1), persistent=False
         )
         self.out_feature_key = "p2"
         if torch.are_deterministic_algorithms_enabled():

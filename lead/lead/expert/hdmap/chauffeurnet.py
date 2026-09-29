@@ -1,0 +1,232 @@
+"""
+Utilities to render bird's eye view semantic segmentation maps.
+Code adapted from https://github.com/zhejz/carla-roach
+"""
+
+import os
+from collections import deque
+from pathlib import Path
+
+import carla
+import cv2 as cv
+import h5py
+import numpy as np
+from gym import spaces
+
+from lead.expert.hdmap.obs_manager import ObsManagerBase
+from lead.expert.hdmap.traffic_light import TrafficLightHandler
+
+COLOR_MAGENTA = (255, 0, 255)
+COLOR_MAGENTA_2 = (255, 140, 255)
+COLOR_WHITE = (255, 255, 255)
+COLOR_ALUMINIUM_5 = (46, 52, 54)
+
+
+class ObsManager(ObsManagerBase):
+    """
+    Generates bev semantic segmentation maps.
+    """
+
+    def __init__(self, obs_configs, config):
+        self._width = int(obs_configs["width_in_pixels"])
+        self._pixels_ev_to_bottom = obs_configs["pixels_ev_to_bottom"]
+        self._pixels_per_meter = obs_configs["pixels_per_meter"]
+        self._history_idx = obs_configs["history_idx"]
+        self._scale_bbox = obs_configs.get("scale_bbox", True)
+        self._scale_mask_col = obs_configs.get("scale_mask_col", 1.1)
+        maxlen_queue = max(
+            max(obs_configs["history_idx"]) + 1,
+            -min(obs_configs["history_idx"]),
+        )
+        self._history_queue = deque(maxlen=maxlen_queue)
+        self.visualize = int(os.environ.get("DEBUG_CHALLENGE", 0)) or int(
+            os.environ.get("TMP_VISU", 0),
+        )
+        self.config = config
+
+        self._image_channels = 3
+        self._masks_channels = 3 + 3 * len(self._history_idx)
+        self.vehicle = None
+        self._world = None
+
+        if "map_folder" in obs_configs:
+            map_folder = obs_configs["map_folder"]
+        else:
+            map_folder = "maps"
+
+        self._map_dir = Path(__file__).resolve().parent / map_folder
+
+        super().__init__()
+
+    def _define_obs_space(self):
+        self.obs_space = spaces.Dict(
+            {
+                "rendered": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(self._width, self._width, self._image_channels),
+                    dtype=np.uint8,
+                ),
+                "masks": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(self._masks_channels, self._width, self._width),
+                    dtype=np.uint8,
+                ),
+            },
+        )
+
+    def attach_ego_vehicle(self, vehicle, criteria_stop):
+        self.vehicle = vehicle
+        self._world = self.vehicle.get_world()
+        self.criteria_stop = criteria_stop
+
+        # splitting because for Town13 the name is 'Carla/Maps/Town13/Town13' instead of 'Town13'
+        maps_h5_path = self._map_dir / (
+            self._world.get_map().name.split("/")[-1] + ".h5"
+        )
+        with h5py.File(maps_h5_path, "r", libver="latest", swmr=True) as hf:
+            self._road = np.array(hf["road"], dtype=np.uint8)
+            self._lane_marking_all = np.array(hf["lane_marking_all"], dtype=np.uint8)
+            self._lane_marking_white_broken = np.array(
+                hf["lane_marking_white_broken"],
+                dtype=np.uint8,
+            )
+
+            self._world_offset = np.array(
+                hf.attrs["world_offset_in_meters"],
+                dtype=np.float32,
+            )
+            # in case they aren't close, print them to know what values they should be
+            if not np.isclose(
+                self._pixels_per_meter,
+                float(hf.attrs["pixels_per_meter"]),
+            ):
+                print(self._pixels_per_meter, float(hf.attrs["pixels_per_meter"]))
+            assert np.isclose(
+                self._pixels_per_meter,
+                float(hf.attrs["pixels_per_meter"]),
+            )
+
+        self._distance_threshold = np.ceil(self._width / self._pixels_per_meter)
+
+        TrafficLightHandler.reset(self._world)
+
+    def get_observation(self, close_traffic_lights=None):
+        ev_transform = self.vehicle.get_transform()
+        ev_loc = ev_transform.location
+        ev_rot = ev_transform.rotation
+        ev_bbox = self.vehicle.bounding_box
+
+        m_warp = self._get_warp_transform(ev_loc, ev_rot)
+
+        # road_mask, lane_mask
+        road_mask = cv.warpAffine(
+            self._road,
+            m_warp,
+            (self._width, self._width),
+        ).astype(bool)
+        lane_mask_all = cv.warpAffine(
+            self._lane_marking_all,
+            m_warp,
+            (self._width, self._width),
+        ).astype(bool)
+        lane_mask_broken = cv.warpAffine(
+            self._lane_marking_white_broken,
+            m_warp,
+            (self._width, self._width),
+        ).astype(bool)
+
+        # render
+        if self.visualize:
+            # ev_mask
+            ev_mask = self._get_mask_from_actor_list(
+                [(ev_transform, ev_bbox.location, ev_bbox.extent)],
+                m_warp,
+            )
+
+            image = np.zeros([self._width, self._width, 3], dtype=np.uint8)
+            image[road_mask] = COLOR_ALUMINIUM_5
+            image[lane_mask_all] = COLOR_MAGENTA
+            image[lane_mask_broken] = COLOR_MAGENTA_2
+            image[ev_mask] = COLOR_WHITE
+
+        # masks
+        # 0 = Unlabeled
+        c_all = road_mask * 1
+        c_all[lane_mask_all] = 3
+        c_all[lane_mask_broken] = 4
+
+        # Align with LiDAR voxelgrid
+        c_all = np.rot90(c_all, k=-1)
+
+        obs_dict = {"hdmap_classes": c_all}
+        if self.visualize:
+            # For visualization we don't rotate as
+            obs_dict["rendered"] = image
+
+        return obs_dict
+
+    def _get_mask_from_actor_list(self, actor_list, m_warp):
+        mask = np.zeros([self._width, self._width], dtype=np.uint8)
+        for actor_transform, bb_loc, bb_ext in actor_list:
+            corners = [
+                carla.Location(x=-bb_ext.x, y=-bb_ext.y),
+                carla.Location(x=bb_ext.x, y=-bb_ext.y),
+                carla.Location(x=bb_ext.x, y=0),
+                carla.Location(x=bb_ext.x, y=bb_ext.y),
+                carla.Location(x=-bb_ext.x, y=bb_ext.y),
+            ]
+            corners = [bb_loc + corner for corner in corners]
+
+            corners = [actor_transform.transform(corner) for corner in corners]
+            corners_in_pixel = np.array(
+                [[self._world_to_pixel(corner)] for corner in corners],
+            )
+            corners_warped = cv.transform(corners_in_pixel, m_warp)
+
+            cv.fillConvexPoly(mask, np.round(corners_warped).astype(np.int32), 1)
+        return mask.astype(bool)
+
+    def _get_warp_transform(self, ev_loc, ev_rot):
+        ev_loc_in_px = self._world_to_pixel(ev_loc)
+        yaw = np.deg2rad(ev_rot.yaw)
+
+        forward_vec = np.array([np.cos(yaw), np.sin(yaw)])
+        right_vec = np.array([np.cos(yaw + 0.5 * np.pi), np.sin(yaw + 0.5 * np.pi)])
+
+        bottom_left = (
+            ev_loc_in_px
+            - self._pixels_ev_to_bottom * forward_vec
+            - (0.5 * self._width) * right_vec
+        )
+        top_left = (
+            ev_loc_in_px
+            + (self._width - self._pixels_ev_to_bottom) * forward_vec
+            - (0.5 * self._width) * right_vec
+        )
+        top_right = (
+            ev_loc_in_px
+            + (self._width - self._pixels_ev_to_bottom) * forward_vec
+            + (0.5 * self._width) * right_vec
+        )
+
+        src_pts = np.stack((bottom_left, top_left, top_right), axis=0).astype(
+            np.float32,
+        )
+        dst_pts = np.array(
+            [[0, self._width - 1], [0, 0], [self._width - 1, 0]],
+            dtype=np.float32,
+        )
+        return cv.getAffineTransform(src_pts, dst_pts)
+
+    def _world_to_pixel(self, location, projective=False):
+        """Converts the world coordinates to pixel coordinates"""
+        x = self._pixels_per_meter * (location.x - self._world_offset[0])
+        y = self._pixels_per_meter * (location.y - self._world_offset[1])
+
+        if projective:
+            p = np.array([x, y, 1], dtype=np.float32)
+        else:
+            p = np.array([x, y], dtype=np.float32)
+        return p

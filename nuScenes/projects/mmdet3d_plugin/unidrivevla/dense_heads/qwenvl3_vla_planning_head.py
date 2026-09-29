@@ -13,10 +13,13 @@
 # limitations under the License.
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional, List
 
+import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -45,6 +48,7 @@ from .utils import (
     permute_metas_per_camera_fields,
 )
 from .modules import OccLatentDecoder, DenseDepthNet
+from .canbus_prompt import build_driving_user_prompt
 
 
 from projects.mmdet3d_plugin.losses.collision_loss import CollisionLoss
@@ -70,9 +74,17 @@ class DrivingBatch:
     command: Optional[torch.Tensor]
     ego_status: Optional[torch.Tensor]
     view_token_ids: Optional[torch.Tensor] = None
+    prompt_id_lists: Optional[List[List[int]]] = None
     traj_answer_ids: Optional[torch.Tensor] = None
     traj_answer_mask: Optional[torch.Tensor] = None
     traj_labels: Optional[torch.Tensor] = None
+    traj_answer_lens: Optional[List[int]] = None
+    coc_texts: Optional[List[str]] = None
+    coc_override_texts: Optional[List[str]] = None
+    coc_answer_ids: Optional[torch.Tensor] = None
+    coc_answer_mask: Optional[torch.Tensor] = None
+    coc_labels: Optional[torch.Tensor] = None
+    coc_answer_lens: Optional[List[int]] = None
     prompt_lens: Optional[List[int]] = None
 
 class QwenConfig:
@@ -144,8 +156,25 @@ class QwenVL3APlanningHead(nn.Module):
         ar_loss_weight: float = 0.1,
         train_vlm: bool = False,
         enable_traj_ar: bool = False,
+        shared_decoder: bool = False,
         traj_ar_loss_weight: float = 0.1,
         traj_ar_target: Literal["waypoint", "raw_delta", "norm_delta"] = "waypoint",
+        coc_jsonl_path: Optional[str] = None,
+        enable_coc: bool = False,
+        enable_coc_policy_prefix: bool = False,
+        enable_coc_context: bool = False,
+        coc_context_format: Literal["cot", "nav_cot", "nav_cot_plan"] = "nav_cot",
+        coc_context_dropout: float = 0.0,
+        coc_planning_loss_weight: float = 0.0,
+        enable_coc_language_output: bool = False,
+        coc_language_target_format: Literal["cot", "nav_cot"] = "cot",
+        coc_language_loss_weight: float = 0.0,
+        enable_coc_generate: bool = False,
+        coc_generate_max_new_tokens: int = 128,
+        coc_eval_source: Literal["pred", "gt", "none"] = "pred",
+        coc_eval_injection: Literal["answer", "context", "none"] = "answer",
+        driving_prefix_max_len: int = 3840,
+        include_ego_status_prompt: bool = False,
         loss_planning: Optional[dict] = None,
         occ_loss_weight: float = 1.0,
         collision_loss_weight: float = 0.0,
@@ -176,6 +205,12 @@ class QwenVL3APlanningHead(nn.Module):
         feature_fusion_cfg: Optional[dict] = None,
         vlm_grad_scale: float = 1.0,
         lora_cfg: Optional[dict] = None,
+        peft_cfg: Optional[dict] = None,
+        visual_lora_cfg: Optional[dict] = None,
+        visual_wasp_cfg: Optional[dict] = None,
+        visual_projector_wasp_cfg: Optional[dict] = None,
+        visual_gradient_checkpointing: bool = True,
+        joint_transformer_checkpoint: bool = True,
         lora_merge_save_dir: Optional[str] = None,
         driving_deepstack: bool = False,
         **kwargs,
@@ -195,11 +230,47 @@ class QwenVL3APlanningHead(nn.Module):
         self._inference_attn_impl = inference_attn_impl
         self.ar_loss_weight = ar_loss_weight
         self.train_vlm = train_vlm
+        self.shared_decoder = bool(shared_decoder)
         self.enable_traj_ar = enable_traj_ar
         self.traj_ar_loss_weight = traj_ar_loss_weight
         assert traj_ar_target in ("waypoint", "raw_delta", "norm_delta"), \
             f"traj_ar_target must be one of waypoint/raw_delta/norm_delta, got {traj_ar_target}"
         self.traj_ar_target = traj_ar_target
+        assert coc_context_format in ("cot", "nav_cot", "nav_cot_plan"), \
+            f"coc_context_format must be one of cot/nav_cot/nav_cot_plan, got {coc_context_format}"
+        assert coc_language_target_format in ("cot", "nav_cot"), \
+            f"coc_language_target_format must be one of cot/nav_cot, got {coc_language_target_format}"
+        assert coc_eval_source in ("pred", "gt", "none"), \
+            f"coc_eval_source must be one of pred/gt/none, got {coc_eval_source}"
+        assert coc_eval_injection in ("answer", "context", "none"), \
+            f"coc_eval_injection must be one of answer/context/none, got {coc_eval_injection}"
+        enable_coc = bool(enable_coc)
+        assert not (enable_coc and enable_coc_language_output and enable_traj_ar), \
+            "enable_coc_language_output uses the assistant answer slot and cannot be enabled with enable_traj_ar"
+        self.enable_coc = enable_coc
+        self.enable_coc_policy_prefix = enable_coc and bool(enable_coc_policy_prefix)
+        self.enable_coc_context = enable_coc and (bool(enable_coc_context) or self.enable_coc_policy_prefix)
+        self.coc_context_format = coc_context_format
+        self.coc_context_dropout = float(coc_context_dropout) if enable_coc else 0.0
+        self.coc_planning_loss_weight = float(coc_planning_loss_weight) if enable_coc else 0.0
+        if self.coc_planning_loss_weight != 0.0:
+            raise NotImplementedError(
+                "coc_planning_loss_weight is reserved for future pred_xyz planning supervision; "
+                "current CoC training uses language loss plus the original planning loss."
+            )
+        self.enable_coc_language_output = enable_coc and bool(enable_coc_language_output)
+        self.coc_language_target_format = coc_language_target_format
+        self.coc_language_loss_weight = float(coc_language_loss_weight) if enable_coc else 0.0
+        self.enable_coc_generate = enable_coc and bool(enable_coc_generate)
+        self.coc_generate_max_new_tokens = int(coc_generate_max_new_tokens)
+        self.coc_eval_source = coc_eval_source if enable_coc else "none"
+        self.coc_eval_injection = coc_eval_injection if enable_coc else "none"
+        self.include_ego_status_prompt = bool(include_ego_status_prompt)
+        self.driving_prefix_max_len = int(driving_prefix_max_len)
+        if self.driving_prefix_max_len <= 0:
+            raise ValueError(f"driving_prefix_max_len must be positive, got {driving_prefix_max_len}")
+        self._token_ids_cache: Dict[str, tuple] = {}
+        self.coc_by_token = self._load_coc_jsonl(coc_jsonl_path) if enable_coc and coc_jsonl_path else {}
         self.occ_loss_weight = occ_loss_weight
         self.collision_loss_weight = collision_loss_weight
         self.collision_loss_fn = CollisionLoss(weight=1.0) if collision_loss_weight > 0 else None
@@ -238,6 +309,10 @@ class QwenVL3APlanningHead(nn.Module):
             perception_expert_cfg = get_qwen_config('qwen3_28l')
             action_expert_cfg = get_qwen_config('qwen3_28l')
 
+        if self.shared_decoder:
+            perception_expert_cfg = qwen3_vl_cfg
+            action_expert_cfg = qwen3_vl_cfg
+
         self.lora_merge_save_dir = lora_merge_save_dir
 
         self.qwen3_vl_with_expert = Qwen3VLWithExpertModel(
@@ -248,7 +323,64 @@ class QwenVL3APlanningHead(nn.Module):
             precision=dtype,
             train_vlm=train_vlm,
             lora_cfg=lora_cfg,
+            shared_decoder=self.shared_decoder,
+            peft_cfg=peft_cfg,
+            visual_lora_cfg=visual_lora_cfg,
+            visual_wasp_cfg=visual_wasp_cfg,
+            visual_projector_wasp_cfg=visual_projector_wasp_cfg,
         )
+
+        self._wasp_loss_weight = 0.0
+        if peft_cfg is not None:
+            peft_type = str(peft_cfg.get("type", "lora")).lower()
+            if peft_type == "wasp":
+                self._wasp_loss_weight = float(
+                    peft_cfg.get(
+                        "wasp_loss_weight", peft_cfg.get("beta", 0.01)
+                    )
+                )
+
+        self._visual_wasp_loss_weight = 0.0
+        if visual_wasp_cfg is not None:
+            visual_wasp_type = str(
+                visual_wasp_cfg.get("type", "wasp")
+            ).lower()
+            if visual_wasp_type != "wasp":
+                raise ValueError(
+                    "visual_wasp_cfg only supports type='wasp'; "
+                    f"got {visual_wasp_type!r}."
+                )
+            self._visual_wasp_loss_weight = float(
+                visual_wasp_cfg.get(
+                    "wasp_loss_weight", visual_wasp_cfg.get("beta", 0.01)
+                )
+            )
+
+        self._visual_projector_wasp_loss_weight = 0.0
+        if visual_projector_wasp_cfg is not None:
+            projector_wasp_type = str(
+                visual_projector_wasp_cfg.get("type", "wasp")
+            ).lower()
+            if projector_wasp_type != "wasp":
+                raise ValueError(
+                    "visual_projector_wasp_cfg only supports type='wasp'; "
+                    f"got {projector_wasp_type!r}."
+                )
+            self._visual_projector_wasp_loss_weight = float(
+                visual_projector_wasp_cfg.get(
+                    "wasp_loss_weight",
+                    visual_projector_wasp_cfg.get("beta", 0.01),
+                )
+            )
+
+        self._compute_wasp_regularization_this_step = True
+        self._wasp_regularization_step_scale = 1.0
+
+        if (
+            attn_implementation == "flex"
+            and os.environ.get("UNIDRIVE_DISABLE_COMPILED_FLEX", "0").lower() in ("1", "true", "yes", "on")
+        ):
+            attn_implementation = "sdpa"
 
         self.attn_implementation = attn_implementation
         self.qwen3_vl_with_expert._vla_attn_impl = self.attn_implementation
@@ -405,7 +537,11 @@ class QwenVL3APlanningHead(nn.Module):
         if hasattr(self.qwen3_vl_with_expert.qwen3_vl, 'lm_head'):
             self.qwen3_vl_with_expert.qwen3_vl.lm_head.requires_grad_(False)
 
+        self.visual_gradient_checkpointing_enabled = bool(
+            visual_gradient_checkpointing
+        )
         self.gradient_checkpointing_enable()
+        self.joint_transformer_checkpoint = bool(joint_transformer_checkpoint)
         self.gradient_checkpointing_enabled = True
 
         self.vlm_grad_scale = vlm_grad_scale
@@ -413,6 +549,7 @@ class QwenVL3APlanningHead(nn.Module):
 
         self.view_token_str_list = NUSCENES_VIEW_TOKENS
         self.view_token_ids = None
+        self.view_token_id_list = None
 
         self._cached_block_mask = None
         self._cached_block_mask_key = None
@@ -422,14 +559,20 @@ class QwenVL3APlanningHead(nn.Module):
             self.adaptive_feature_fusion, mode="default", fullgraph=False, dynamic=True
         )
 
+    def _get_view_token_id_list(self) -> List[int]:
+        if self.view_token_id_list is None:
+            tokenizer = self.qwen3_vl_with_expert.processor.tokenizer
+            self.view_token_id_list = [
+                tokenizer.convert_tokens_to_ids(token)
+                for token in self.view_token_str_list
+            ]
+        return self.view_token_id_list
+
     def _get_view_token_ids(self, device):
         if self.view_token_ids is None:
-            tokenizer = self.qwen3_vl_with_expert.processor.tokenizer
-            ids = []
-            for t in self.view_token_str_list:
-                tid = tokenizer.convert_tokens_to_ids(t)
-                ids.append(tid)
-            self.view_token_ids = torch.tensor(ids, dtype=torch.long, device=device)
+            self.view_token_ids = torch.tensor(
+                self._get_view_token_id_list(), dtype=torch.long, device=device
+            )
         return self.view_token_ids.to(device)
 
     def gradient_checkpointing_enable(self):
@@ -438,22 +581,28 @@ class QwenVL3APlanningHead(nn.Module):
         self.qwen3_vl_with_expert.qwen3_vl.language_model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs=gc_kwargs
         )
-        self.qwen3_vl_with_expert.qwen3_vl.visual.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs=gc_kwargs
-        )
-        self.qwen3_vl_with_expert.qwen3_perception_expert.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs=gc_kwargs
-        )
-        self.qwen3_vl_with_expert.qwen3_action_expert.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs=gc_kwargs
-        )
+        visual = self.qwen3_vl_with_expert.qwen3_vl.visual
+        if self.visual_gradient_checkpointing_enabled:
+            visual.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=gc_kwargs
+            )
+        else:
+            visual.gradient_checkpointing_disable()
+        if not self.shared_decoder:
+            self.qwen3_vl_with_expert.perception_decoder.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=gc_kwargs
+            )
+            self.qwen3_vl_with_expert.action_decoder.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=gc_kwargs
+            )
 
     def gradient_checkpointing_disable(self):
         self.gradient_checkpointing_enabled = False
         self.qwen3_vl_with_expert.qwen3_vl.language_model.gradient_checkpointing_disable()
         self.qwen3_vl_with_expert.qwen3_vl.visual.gradient_checkpointing_disable()
-        self.qwen3_vl_with_expert.qwen3_perception_expert.gradient_checkpointing_disable()
-        self.qwen3_vl_with_expert.qwen3_action_expert.gradient_checkpointing_disable()
+        if not self.shared_decoder:
+            self.qwen3_vl_with_expert.perception_decoder.gradient_checkpointing_disable()
+            self.qwen3_vl_with_expert.action_decoder.gradient_checkpointing_disable()
 
     def merge_and_save_lora(self, save_dir: Optional[str] = None) -> None:
         target = save_dir or self.lora_merge_save_dir
@@ -469,6 +618,17 @@ class QwenVL3APlanningHead(nn.Module):
         if self.gradient_checkpointing_enabled and self.training:
             return torch.utils.checkpoint.checkpoint(func, *args, use_reentrant=False, **kwargs)
         return func(*args, **kwargs)
+
+    def set_wasp_accumulation_state(self, compute: bool, scale: float = 1.0):
+        self._compute_wasp_regularization_this_step = bool(compute)
+        self._wasp_regularization_step_scale = float(scale) if compute else 0.0
+
+    def _encode_text_cached(self, tokenizer, text: str) -> List[int]:
+        token_ids = self._token_ids_cache.get(text)
+        if token_ids is None:
+            token_ids = tuple(tokenizer.encode(text, add_special_tokens=False))
+            self._token_ids_cache[text] = token_ids
+        return list(token_ids)
 
     def _prepare_attention_masks_4d(self, att_2d_masks):
         att_2d_masks_4d = att_2d_masks[:, None, :, :]
@@ -609,8 +769,12 @@ class QwenVL3APlanningHead(nn.Module):
                 projected_features.append(feat)
 
         if all_image_grids is not None and len(all_image_grids) > 0:
-            h_grid = int(all_image_grids[0, 1].item())
-            w_grid = int(all_image_grids[0, 2].item())
+            grid_hw = self.qwen3_vl_with_expert._last_image_grid_hw
+            if grid_hw is None:
+                h_grid = int(all_image_grids[0, 1].item())
+                w_grid = int(all_image_grids[0, 2].item())
+            else:
+                h_grid, w_grid = grid_hw
             num_views = 6
 
             for ds_feat in projected_features:
@@ -758,13 +922,213 @@ class QwenVL3APlanningHead(nn.Module):
         trajs_lidar = torch.einsum('abcij,jkab->abcik', trajs, rot_mat_T)
         return trajs_lidar
 
+    def _load_coc_jsonl(self, jsonl_path: str) -> Dict[str, dict]:
+        coc_by_token = {}
+        loaded = 0
+        skipped = 0
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    skipped += 1
+                    continue
+                token = item.get("sample_token") or item.get("token")
+                if not token:
+                    skipped += 1
+                    continue
+                coc_by_token[token] = dict(
+                    nav_text=item.get("nav_text") or "",
+                    nav_command=item.get("nav_command") or "",
+                    cot=item.get("cot") or "",
+                )
+                loaded += 1
+        print(f"[COC] Loaded {loaded} annotations from {jsonl_path}; skipped {skipped}")
+        return coc_by_token
+
+    def _extract_sample_tokens(self, img_metas, batch_size: int) -> List[Optional[str]]:
+        def unwrap(x):
+            if hasattr(x, "data"):
+                return unwrap(x.data)
+            if isinstance(x, (list, tuple)) and len(x) == 1:
+                inner = unwrap(x[0])
+                if isinstance(inner, (list, tuple)):
+                    return inner
+                return [inner]
+            return x
+
+        metas = unwrap(img_metas)
+        if isinstance(metas, dict):
+            metas = [metas]
+        if not isinstance(metas, (list, tuple)):
+            return [None] * batch_size
+
+        out = []
+        for meta in metas:
+            if hasattr(meta, "data"):
+                meta = unwrap(meta)
+            if isinstance(meta, (list, tuple)) and meta:
+                meta = meta[0]
+            if isinstance(meta, dict):
+                out.append(meta.get("token") or meta.get("sample_idx"))
+            else:
+                out.append(None)
+        if len(out) < batch_size:
+            out.extend([None] * (batch_size - len(out)))
+        return out[:batch_size]
+
+    def _get_coc_records(self, sample_tokens: Optional[List[Optional[str]]], batch_size: int) -> List[Optional[dict]]:
+        if not self.coc_by_token or not sample_tokens:
+            return [None] * batch_size
+        return [self.coc_by_token.get(tok) if tok is not None else None for tok in sample_tokens[:batch_size]]
+
+    def _format_coc_context(self, record: Optional[dict]) -> str:
+        if not record:
+            return ""
+        parts = []
+        if self.coc_context_format in ("nav_cot", "nav_cot_plan"):
+            nav = record.get("nav_text") or record.get("nav_command") or ""
+            if nav:
+                parts.append(f"Navigation hint: {nav}")
+        cot = record.get("cot") or ""
+        if cot:
+            parts.append(f"Chain-of-causation reasoning: {cot}")
+        if not parts:
+            return ""
+        return "4. Chain-of-causation context:\n   - " + "\n   - ".join(parts)
+
+    def _format_coc_context_from_text(self, text: Optional[str]) -> str:
+        text = (text or "").strip()
+        if not text:
+            return ""
+        return f"4. Chain-of-causation context:\n   - Chain-of-causation reasoning: {text}"
+
+    def _format_coc_language_target(self, record: Optional[dict]) -> str:
+        if not record:
+            return ""
+        cot = (record.get("cot") or "").strip()
+        nav = (record.get("nav_text") or record.get("nav_command") or "").strip()
+        if self.coc_language_target_format == "nav_cot" and nav and cot:
+            return f"Navigation: {nav}\nReasoning: {cot}"
+        if self.coc_language_target_format == "nav_cot" and nav:
+            return f"Navigation: {nav}"
+        return cot
+
+    def _decode_coc_from_slots(
+        self,
+        batch: DrivingBatch,
+        prefix_embs: torch.Tensor,
+        prefix_input_ids: torch.Tensor,
+        all_image_grids,
+        deepstack_features,
+        max_new_tokens: Optional[int] = None,
+    ) -> List[str]:
+        tokenizer = self.qwen3_vl_with_expert.processor.tokenizer
+        max_new_tokens = int(max_new_tokens or self.coc_generate_max_new_tokens)
+        if max_new_tokens <= 0:
+            return [""] * int(prefix_embs.shape[0])
+
+        device = prefix_input_ids.device
+        bsz = int(prefix_input_ids.shape[0])
+        prefix_pad_masks = prefix_input_ids != tokenizer.pad_token_id
+        prefix_att_masks = torch.zeros_like(prefix_pad_masks, dtype=torch.long)
+        for b_idx, p_len in enumerate(batch.prompt_lens):
+            prefix_att_masks[b_idx, : int(p_len)] = 1
+        prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_att_4d = self._prepare_attention_masks_4d(prefix_att_2d).to(prefix_embs.dtype)
+        prefix_pos_ids, _ = self.get_position_ids(prefix_input_ids, all_image_grids, prefix_pad_masks)
+        ds_embeds = deepstack_features if self.driving_deepstack and deepstack_features is not None else None
+        image_token_id = self.qwen3_vl_with_expert.qwen3_vl.config.image_token_id
+        vis_masks = (prefix_input_ids == image_token_id) if ds_embeds is not None else None
+
+        lm_head = self.qwen3_vl_with_expert.qwen3_vl.lm_head
+        embed_tokens = self.qwen3_vl_with_expert.qwen3_vl.get_input_embeddings()
+        im_end_ids = self._encode_text_cached(tokenizer, "<|im_end|>")
+        stop_ids = set(im_end_ids)
+        if tokenizer.eos_token_id is not None:
+            stop_ids.add(tokenizer.eos_token_id)
+        if tokenizer.pad_token_id is not None:
+            stop_ids.add(tokenizer.pad_token_id)
+
+        generated = [[] for _ in range(bsz)]
+        finished = torch.zeros((bsz,), dtype=torch.bool, device=device)
+        old_impl = self.qwen3_vl_with_expert.qwen3_vl.language_model.config._attn_implementation
+        self.qwen3_vl_with_expert.qwen3_vl.language_model.config._attn_implementation = self._inference_attn_impl
+        try:
+            prefix_outputs, past_key_values, _ = self.qwen3_vl_with_expert.forward(
+                attention_mask=prefix_att_4d,
+                position_ids=prefix_pos_ids,
+                past_key_values=None,
+                inputs_embeds=[prefix_embs, None, None],
+                use_cache=True,
+                deepstack_visual_embeds=ds_embeds,
+                visual_pos_masks=vis_masks,
+            )
+            prefix_hidden = prefix_outputs[0]
+            last_indices = torch.tensor(
+                [max(int(p_len) - 1, 0) for p_len in batch.prompt_lens],
+                dtype=torch.long,
+                device=device,
+            ).clamp(max=max(int(prefix_hidden.shape[1]) - 1, 0))
+            next_hidden = prefix_hidden[torch.arange(bsz, device=device), last_indices]
+            next_logits = lm_head(next_hidden.to(lm_head.weight.dtype))
+            next_token = next_logits.argmax(dim=-1)
+
+            cache_pos = prefix_pos_ids.max(dim=0).values.max(dim=-1).values + 1
+            generated_att_mask = torch.zeros((bsz, 0), dtype=torch.bool, device=device)
+            for _ in range(max_new_tokens):
+                step_tokens = next_token.masked_fill(finished, tokenizer.pad_token_id)
+                was_finished = finished.clone()
+                for b_idx, tok in enumerate(step_tokens.detach().cpu().tolist()):
+                    if finished[b_idx]:
+                        continue
+                    if tok in stop_ids:
+                        finished[b_idx] = True
+                    else:
+                        generated[b_idx].append(tok)
+                if bool(finished.all().item()):
+                    break
+
+                step_embs = embed_tokens(step_tokens[:, None]).to(prefix_embs.dtype)
+                step_pos_1d = cache_pos[:, None]
+                step_pos_ids = torch.stack([step_pos_1d] * 3, dim=0)
+                step_att_2d = torch.cat([prefix_pad_masks, generated_att_mask], dim=1)[:, None, :]
+                self_att = torch.ones((bsz, 1, 1), dtype=torch.bool, device=device)
+                step_att_2d = torch.cat([step_att_2d, self_att], dim=-1)
+                step_att_mask = self._prepare_attention_masks_4d(step_att_2d).to(prefix_embs.dtype)
+                step_outputs, past_key_values, _ = self.qwen3_vl_with_expert.forward(
+                    attention_mask=step_att_mask,
+                    position_ids=step_pos_ids,
+                    past_key_values=past_key_values,
+                    inputs_embeds=[step_embs, None, None],
+                    use_cache=True,
+                )
+                step_hidden = step_outputs[0][:, -1]
+                step_logits = lm_head(step_hidden.to(lm_head.weight.dtype))
+                next_token = step_logits.argmax(dim=-1)
+                cache_pos = cache_pos + 1
+                generated_att_mask = torch.cat([generated_att_mask, (~was_finished)[:, None]], dim=1)
+        finally:
+            self.qwen3_vl_with_expert.qwen3_vl.language_model.config._attn_implementation = old_impl
+
+        return [tokenizer.decode(ids, skip_special_tokens=True).strip() for ids in generated]
+
     def _build_driving_batch(
         self,
         img: torch.Tensor,
         command=None,
         ego_status=None,
+        gt_ego_lcf_feat=None,
+        gt_ego_his_trajs=None,
         hist_traj=None,
         gt_trajs=None,
+        coc_records: Optional[List[Optional[dict]]] = None,
+        include_coc_answer_tokens: bool = True,
+        include_coc_context: bool = True,
+        force_coc_language_prompt: bool = False,
+        coc_override_texts: Optional[List[str]] = None,
     ) -> DrivingBatch:
         device = img.device if img is not None else torch.device("cuda")
         b = int(img.shape[0]) if torch.is_tensor(img) else 1
@@ -784,7 +1148,12 @@ class QwenVL3APlanningHead(nn.Module):
                      command = torch.tensor(command)
 
             command = command.to(device)
-            cmd_idx = command.view(-1).long()
+            if command.dim() > 1 and command.shape[-1] == 3:
+                cmd_idx = command.argmax(dim=-1).view(-1).long()
+                command = command.to(dtype=torch.float32)
+            else:
+                cmd_idx = command.view(-1).long()
+                command = F.one_hot(cmd_idx, num_classes=3).to(device=device, dtype=torch.float32)
 
             idx_list = cmd_idx.tolist()
         else:
@@ -792,22 +1161,29 @@ class QwenVL3APlanningHead(nn.Module):
 
         nav_cmd_texts = [_NAV_CMD_FIXED.get(i, _NAV_CMD_FIXED[2]) for i in idx_list]
 
-        hist_traj_np = hist_traj.detach().cpu().numpy()
+        if hist_traj is None:
+            hist_traj_np = np.zeros((b, self.hist_traj_steps, self.hist_traj_dim), dtype=np.float32)
+        elif torch.is_tensor(hist_traj):
+            hist_traj_np = hist_traj.detach().cpu().numpy()
+        else:
+            hist_traj_np = np.asarray(hist_traj, dtype=np.float32)
+        if hist_traj_np.ndim == 2:
+            hist_traj_np = hist_traj_np[None]
 
         if not hasattr(self.qwen3_vl_with_expert, "processor") or self.qwen3_vl_with_expert.processor is None:
             raise RuntimeError("QwenVLAPlanningHead expects `self.qwen3_vl_with_expert.processor`")
 
         tokenizer = self.qwen3_vl_with_expert.processor.tokenizer
 
-        im_start_id = tokenizer.encode("<|im_start|>", add_special_tokens=False)[0]
-        im_end_id = tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
-        nl_id = tokenizer.encode("\n", add_special_tokens=False)[0]
+        im_start_id = self._encode_text_cached(tokenizer, "<|im_start|>")[0]
+        im_end_id = self._encode_text_cached(tokenizer, "<|im_end|>")[0]
+        nl_id = self._encode_text_cached(tokenizer, "\n")[0]
 
-        system_ids = tokenizer.encode("system", add_special_tokens=False)
-        user_ids = tokenizer.encode("user", add_special_tokens=False)
-        assistant_ids = tokenizer.encode("assistant", add_special_tokens=False)
+        system_ids = self._encode_text_cached(tokenizer, "system")
+        user_ids = self._encode_text_cached(tokenizer, "user")
+        assistant_ids = self._encode_text_cached(tokenizer, "assistant")
 
-        sys_content_ids = tokenizer.encode(NUSCENES_SYSTEM_PROMPT, add_special_tokens=False)
+        sys_content_ids = self._encode_text_cached(tokenizer, NUSCENES_SYSTEM_PROMPT)
         sys_part = [im_start_id] + system_ids + [nl_id] + sys_content_ids + [im_end_id, nl_id]
 
         user_start_part = [im_start_id] + user_ids + [nl_id]
@@ -815,21 +1191,63 @@ class QwenVL3APlanningHead(nn.Module):
         user_end_assistant_start_part = [im_end_id, nl_id, im_start_id] + assistant_ids + [nl_id]
 
         input_ids_list = []
+        prompt_id_lists = []
         attention_mask_list = []
 
-        for i in range(b):
-            points_str = [f"({pt[0]:+07.2f}, {pt[1]:+07.2f})" for pt in hist_traj_np[i]]
-            hist_traj_str = f"[PT_HIST, {', '.join(points_str)}]"
+        def _batch_item(value, batch_idx):
+            if value is None:
+                return None
+            if torch.is_tensor(value):
+                value = value.detach().to(dtype=torch.float32).cpu().numpy()
+            else:
+                value = np.asarray(value, dtype=np.float32)
+            return value[batch_idx] if value.ndim > 1 else value
 
-            user_prompt_text = NUSCENES_USER_PROMPT_TEMPLATE.format(
-                nav_cmd=nav_cmd_texts[i],
-                hist_traj_str=hist_traj_str,
+        for i in range(b):
+
+
+            coc_record_i = coc_records[i] if coc_records is not None and i < len(coc_records) else None
+            coc_override_i = coc_override_texts[i] if coc_override_texts is not None and i < len(coc_override_texts) else None
+            has_coc_language_target = bool(coc_override_i or self._format_coc_language_target(coc_record_i))
+            use_coc_language_prompt = (
+                force_coc_language_prompt
+                or (
+                    include_coc_answer_tokens
+                    and self.enable_coc_language_output
+                    and has_coc_language_target
+                )
             )
-            user_content_ids = tokenizer.encode(user_prompt_text, add_special_tokens=False)
+            user_prompt_text = build_driving_user_prompt(
+                nav_cmd=nav_cmd_texts[i],
+                hist_traj=hist_traj_np[i],
+                trajectory_prompt_template=NUSCENES_USER_PROMPT_TEMPLATE,
+                use_coc_language_prompt=use_coc_language_prompt,
+                include_ego_status_prompt=self.include_ego_status_prompt,
+                gt_ego_lcf_feat=_batch_item(gt_ego_lcf_feat, i),
+                gt_ego_his_trajs=_batch_item(gt_ego_his_trajs, i),
+                ego_status=_batch_item(ego_status, i),
+            )
+
+            coc_text = ""
+            if include_coc_context and (self.enable_coc_context or coc_override_texts is not None):
+                if coc_override_texts is not None and i < len(coc_override_texts):
+                    coc_text = self._format_coc_context_from_text(coc_override_texts[i])
+                elif coc_records is not None:
+                    coc_text = self._format_coc_context(coc_record_i)
+                if coc_text and self.training and self.coc_context_dropout > 0:
+                    if torch.rand((), device=device).item() < self.coc_context_dropout:
+                        coc_text = ""
+                if coc_text:
+                    user_prompt_text = user_prompt_text.replace(
+                        "\n\nOutput requirements:",
+                        f"\n{coc_text}\n\nOutput requirements:",
+                    )
+            user_content_ids = self._encode_text_cached(tokenizer, user_prompt_text)
 
             full_ids = sys_part + user_start_part + user_content_ids + user_end_assistant_start_part
 
             input_ids_list.append(torch.tensor(full_ids, dtype=torch.long))
+            prompt_id_lists.append(full_ids)
             attention_mask_list.append(torch.ones(len(full_ids), dtype=torch.long))
 
         tokenized_prompt = pad_sequence(input_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id).to(device)
@@ -838,7 +1256,9 @@ class QwenVL3APlanningHead(nn.Module):
         traj_answer_ids = None
         traj_answer_mask = None
         traj_labels = None
+        traj_answer_lens = None
         if gt_trajs is not None:
+            traj_answer_lens = []
             if self.traj_ar_target == "waypoint":
                 gt_trajs_target = torch.cumsum(gt_trajs, dim=1)
             elif self.traj_ar_target == "norm_delta":
@@ -852,8 +1272,14 @@ class QwenVL3APlanningHead(nn.Module):
                 pts = gt_trajs_np[i]
                 pts_str = ", ".join(f"({p[0]:+07.2f}, {p[1]:+07.2f})" for p in pts)
                 answer_text = f"[PT, {pts_str}]"
-                answer_token_ids = tokenizer.encode(answer_text, add_special_tokens=False)
+                answer_token_ids = self._encode_text_cached(tokenizer, answer_text)
                 answer_token_ids = answer_token_ids + [im_end_id, nl_id]
+                traj_answer_lens.append(
+                    sum(
+                        token_id != tokenizer.pad_token_id
+                        for token_id in answer_token_ids[:128]
+                    )
+                )
                 answer_ids_list.append(torch.tensor(answer_token_ids, dtype=torch.long))
 
             traj_answer_ids = pad_sequence(
@@ -873,6 +1299,48 @@ class QwenVL3APlanningHead(nn.Module):
             traj_answer_mask = (traj_answer_ids != tokenizer.pad_token_id).long()
             traj_labels = traj_answer_ids.masked_fill(traj_answer_mask == 0, -100)
 
+        coc_answer_ids = None
+        coc_answer_mask = None
+        coc_labels = None
+        coc_answer_lens = None
+        if (
+            include_coc_answer_tokens
+            and self.enable_coc_language_output
+            and (coc_records is not None or coc_override_texts is not None)
+        ):
+            coc_answer_ids_list = []
+            coc_answer_lens = []
+            coc_loss_masks = []
+            for i in range(b):
+                if coc_override_texts is not None and i < len(coc_override_texts):
+                    target_text = (coc_override_texts[i] or "").strip()
+                else:
+                    target_text = self._format_coc_language_target(coc_records[i] if i < len(coc_records) else None)
+                answer_token_ids = self._encode_text_cached(tokenizer, target_text) if target_text else []
+                answer_token_ids = answer_token_ids + [im_end_id, nl_id] if answer_token_ids else []
+                coc_answer_lens.append(min(len(answer_token_ids), 128))
+                coc_answer_ids_list.append(torch.tensor(answer_token_ids, dtype=torch.long))
+                coc_loss_masks.append(torch.ones(len(answer_token_ids), dtype=torch.long))
+
+            coc_answer_ids = pad_sequence(
+                coc_answer_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id
+            ).to(device)
+            coc_answer_mask = pad_sequence(
+                coc_loss_masks, batch_first=True, padding_value=0
+            ).to(device)
+
+            FIXED_COC_ANSWER_LEN = 128
+            curr_coc_len = coc_answer_ids.shape[1]
+            if curr_coc_len < FIXED_COC_ANSWER_LEN:
+                pad_len = FIXED_COC_ANSWER_LEN - curr_coc_len
+                coc_answer_ids = F.pad(coc_answer_ids, (0, pad_len), value=tokenizer.pad_token_id)
+                coc_answer_mask = F.pad(coc_answer_mask, (0, pad_len), value=0)
+            elif curr_coc_len > FIXED_COC_ANSWER_LEN:
+                coc_answer_ids = coc_answer_ids[:, :FIXED_COC_ANSWER_LEN]
+                coc_answer_mask = coc_answer_mask[:, :FIXED_COC_ANSWER_LEN]
+
+            coc_labels = coc_answer_ids.masked_fill(coc_answer_mask == 0, -100)
+
         return DrivingBatch(
             images=images,
             image_masks=image_masks,
@@ -881,9 +1349,17 @@ class QwenVL3APlanningHead(nn.Module):
             command=command,
             ego_status=ego_status,
             view_token_ids=view_token_ids,
+            prompt_id_lists=prompt_id_lists,
             traj_answer_ids=traj_answer_ids,
             traj_answer_mask=traj_answer_mask,
             traj_labels=traj_labels,
+            traj_answer_lens=traj_answer_lens,
+            coc_texts=[self._format_coc_context(r) for r in coc_records] if coc_records is not None else None,
+            coc_override_texts=coc_override_texts,
+            coc_answer_ids=coc_answer_ids,
+            coc_answer_mask=coc_answer_mask,
+            coc_labels=coc_labels,
+            coc_answer_lens=coc_answer_lens,
         )
 
 
@@ -897,63 +1373,106 @@ class QwenVL3APlanningHead(nn.Module):
         vision_start_id = self.qwen3_vl_with_expert.qwen3_vl.config.vision_start_token_id
         vision_end_id = self.qwen3_vl_with_expert.qwen3_vl.config.vision_end_token_id
         image_token_id = self.qwen3_vl_with_expert.qwen3_vl.config.image_token_id
-        nl_id = self.qwen3_vl_with_expert.processor.tokenizer.encode("\n", add_special_tokens=False)[0]
+        nl_id = self._encode_text_cached(tokenizer, "\n")[0]
 
         bs = images_tensor.shape[0]
         num_views_per_sample = 6
-        view_token_ids = self._get_view_token_ids(device)
+        view_token_id_list = self._get_view_token_id_list()
 
         prefix_input_ids_list = []
+        vision_prefix_lens = []
 
-        FIXED_PREFIX_MAX_LEN = 3740
+        fixed_prefix_max_len = self.driving_prefix_max_len
 
         for b_idx in range(bs):
             sample_input_ids = []
 
             for v_idx in range(num_views_per_sample):
                 img_len = feature_lens[b_idx * num_views_per_sample + v_idx]
-                ids = [view_token_ids[v_idx].item(), nl_id, vision_start_id] + \
+                ids = [view_token_id_list[v_idx], nl_id, vision_start_id] + \
                     [image_token_id] * img_len + \
                     [vision_end_id, nl_id]
                 sample_input_ids.extend(ids)
 
-            prompt_mask = batch.tokenized_prompt_mask[b_idx].bool()
-            prompt_ids = batch.tokenized_prompt[b_idx][prompt_mask].tolist()
+            vision_prefix_lens.append(len(sample_input_ids))
+            if batch.prompt_id_lists is not None:
+                prompt_ids = batch.prompt_id_lists[b_idx]
+            else:
+                prompt_mask = batch.tokenized_prompt_mask[b_idx].bool()
+                prompt_ids = batch.tokenized_prompt[b_idx][prompt_mask].tolist()
             sample_input_ids.extend(prompt_ids)
 
             prefix_input_ids_list.append(torch.tensor(sample_input_ids, dtype=torch.long, device=device))
 
         prompt_lens_list = [ids.shape[0] for ids in prefix_input_ids_list]
 
-        FIXED_TOTAL_LEN = FIXED_PREFIX_MAX_LEN + (
-            batch.traj_answer_ids.shape[1] if batch.traj_answer_ids is not None else 0
+        answer_ids = batch.traj_answer_ids if batch.traj_answer_ids is not None else batch.coc_answer_ids
+        answer_mask = batch.traj_answer_mask if batch.traj_answer_mask is not None else batch.coc_answer_mask
+
+        answer_lens = batch.traj_answer_lens if batch.traj_answer_ids is not None else batch.coc_answer_lens
+        fixed_total_len = fixed_prefix_max_len + (
+            answer_ids.shape[1] if answer_ids is not None else 0
         )
 
-        if batch.traj_answer_ids is not None:
+        def _trim_prefix_ids_keep_prompt_tail(p_ids: torch.Tensor, max_len: int, vision_prefix_len: int) -> torch.Tensor:
+            if p_ids.shape[0] <= max_len:
+                return p_ids
+            if vision_prefix_len < 0 or vision_prefix_len > int(p_ids.shape[0]):
+                return p_ids[-max_len:]
+            if vision_prefix_len >= max_len:
+                return p_ids[:max_len]
+            tail_budget = max_len - vision_prefix_len
+            text_tail = p_ids[vision_prefix_len:][-tail_budget:]
+            return torch.cat([p_ids[:vision_prefix_len], text_tail], dim=0)
+
+        if answer_ids is not None:
             full_ids_list = []
             for b_idx in range(bs):
                 p_ids = prefix_input_ids_list[b_idx]
-                a_ids = batch.traj_answer_ids[b_idx]
-                if p_ids.shape[0] > FIXED_PREFIX_MAX_LEN:
-                    p_ids = p_ids[:FIXED_PREFIX_MAX_LEN]
-                    prompt_lens_list[b_idx] = FIXED_PREFIX_MAX_LEN
+                a_ids = answer_ids[b_idx]
+                if p_ids.shape[0] > fixed_prefix_max_len:
+                    p_ids = _trim_prefix_ids_keep_prompt_tail(
+                        p_ids,
+                        fixed_prefix_max_len,
+                        vision_prefix_lens[b_idx],
+                    )
+                    prompt_lens_list[b_idx] = int(p_ids.shape[0])
                 full_ids_list.append(torch.cat([p_ids, a_ids], dim=0))
 
             prefix_input_ids = pad_sequence(
                 full_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id
             )
             curr_len = prefix_input_ids.shape[1]
-            if curr_len < FIXED_TOTAL_LEN:
-                prefix_input_ids = F.pad(prefix_input_ids, (0, FIXED_TOTAL_LEN - curr_len), value=tokenizer.pad_token_id)
-            elif curr_len > FIXED_TOTAL_LEN:
-                prefix_input_ids = prefix_input_ids[:, :FIXED_TOTAL_LEN]
+            if curr_len < fixed_total_len:
+                prefix_input_ids = F.pad(prefix_input_ids, (0, fixed_total_len - curr_len), value=tokenizer.pad_token_id)
+            elif curr_len > fixed_total_len:
+                prefix_input_ids = prefix_input_ids[:, :fixed_total_len]
         else:
             prefix_input_ids = pad_sequence(prefix_input_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id)
             curr_len = prefix_input_ids.shape[1]
-            if curr_len < FIXED_PREFIX_MAX_LEN:
-                prefix_input_ids = F.pad(prefix_input_ids, (0, FIXED_PREFIX_MAX_LEN - curr_len), value=tokenizer.pad_token_id)
-            elif curr_len > FIXED_PREFIX_MAX_LEN:
-                prefix_input_ids = prefix_input_ids[:, :FIXED_PREFIX_MAX_LEN]
+            if curr_len < fixed_prefix_max_len:
+                prefix_input_ids = F.pad(prefix_input_ids, (0, fixed_prefix_max_len - curr_len), value=tokenizer.pad_token_id)
+            elif curr_len > fixed_prefix_max_len:
+                trimmed_ids_list = []
+                for b_idx, p_ids in enumerate(prefix_input_ids_list):
+                    p_ids = _trim_prefix_ids_keep_prompt_tail(
+                        p_ids,
+                        fixed_prefix_max_len,
+                        vision_prefix_lens[b_idx],
+                    )
+                    trimmed_ids_list.append(p_ids)
+                    prompt_lens_list[b_idx] = int(p_ids.shape[0])
+                prefix_input_ids = pad_sequence(
+                    trimmed_ids_list,
+                    batch_first=True,
+                    padding_value=tokenizer.pad_token_id,
+                )
+                if prefix_input_ids.shape[1] < fixed_prefix_max_len:
+                    prefix_input_ids = F.pad(
+                        prefix_input_ids,
+                        (0, fixed_prefix_max_len - prefix_input_ids.shape[1]),
+                        value=tokenizer.pad_token_id,
+                    )
                 truncated_mask = (prefix_input_ids == image_token_id)
                 valid_img_tokens = truncated_mask.sum().item()
                 if valid_img_tokens < image_features.shape[0]:
@@ -967,8 +1486,8 @@ class QwenVL3APlanningHead(nn.Module):
 
         image_mask = (prefix_input_ids == image_token_id)
 
-        if image_mask.sum() != image_features.shape[0]:
-            target_count = image_mask.sum()
+        target_count = int(image_mask.sum().item())
+        if target_count != image_features.shape[0]:
             current_count = image_features.shape[0]
             if current_count > target_count:
                 image_features = image_features[:target_count]
@@ -981,10 +1500,12 @@ class QwenVL3APlanningHead(nn.Module):
         for b_idx in range(bs):
             p_len = prompt_lens_list[b_idx]
             prefix_att_marks[b_idx, :p_len] = 1
-        if batch.traj_answer_ids is not None:
+        if answer_ids is not None:
+            if answer_lens is None:
+                answer_lens = answer_mask.sum(dim=1).tolist()
             for b_idx in range(bs):
                 p_len = prompt_lens_list[b_idx]
-                real_ans_len = batch.traj_answer_mask[b_idx].sum().item()
+                real_ans_len = int(answer_lens[b_idx])
                 prefix_att_marks[b_idx, p_len:p_len + real_ans_len] = 1
 
         batch.prompt_lens = prompt_lens_list
@@ -1034,13 +1555,17 @@ class QwenVL3APlanningHead(nn.Module):
         status_input = self._maybe_get_status_features(
             batch, ego_status_pred, use_gt=use_gt_status, dtype=dtype,
         )
-        status_emb = self._apply_checkpoint(self.status_mlp, status_input)
+        status_emb = self.status_mlp(status_input)
         status_emb = status_emb.unsqueeze(1)
 
         if hist_traj is not None:
+            if not torch.is_tensor(hist_traj):
+                hist_traj = torch.as_tensor(hist_traj, device=device)
+            else:
+                hist_traj = hist_traj.to(device=device)
             if hist_traj.dtype != dtype:
                 hist_traj = hist_traj.to(dtype=dtype)
-            hist_traj_emb = self._apply_checkpoint(self.hist_traj_encoder, hist_traj.flatten(1))
+            hist_traj_emb = self.hist_traj_encoder(hist_traj.flatten(1))
             status_emb = torch.cat([hist_traj_emb.unsqueeze(1), status_emb], dim=1)
 
         num_status_tokens = status_emb.shape[1]
@@ -1048,7 +1573,7 @@ class QwenVL3APlanningHead(nn.Module):
         if actions.dtype != dtype:
             actions = actions.to(dtype=dtype)
 
-        action_emb = self._apply_checkpoint(self.action_in_proj, actions)
+        action_emb = self.action_in_proj(actions)
         time_emb = create_sinusoidal_pos_embedding(
             timestep, self.action_in_proj.out_features, self.min_period, self.max_period, device=device
         )
@@ -1059,7 +1584,7 @@ class QwenVL3APlanningHead(nn.Module):
             x = F.silu(x)
             return self.action_time_mlp_out(x)
 
-        action_time_emb = self._apply_checkpoint(mlp_func, fused_input)
+        action_time_emb = mlp_func(fused_input)
         suffix_emb = torch.cat([status_emb, action_time_emb], dim=1)
 
         suffix_len = suffix_emb.shape[1]
@@ -1084,6 +1609,47 @@ class QwenVL3APlanningHead(nn.Module):
             return []
         return feature_maps_format(feature_maps)
 
+    def _compute_coc_language_loss(
+        self,
+        batch: DrivingBatch,
+        prefix_out: torch.Tensor,
+        zero_ref: torch.Tensor,
+    ):
+        loss_coc_language = zero_ref.sum() * 0.0
+        if batch.coc_labels is None or batch.coc_answer_mask is None:
+            valid_ratio = torch.tensor(0.0, device=zero_ref.device)
+            return loss_coc_language, valid_ratio
+
+        lm_head = self.qwen3_vl_with_expert.qwen3_vl.lm_head
+        answer_len = batch.coc_labels.shape[1]
+        valid_mask = batch.coc_answer_mask[:, :answer_len].bool()
+        valid_samples = valid_mask.any(dim=1)
+        valid_ratio = valid_samples.to(dtype=torch.float32).mean()
+        sample_indices, answer_offsets = valid_mask.nonzero(as_tuple=True)
+        if sample_indices.numel() == 0:
+            return loss_coc_language, valid_ratio
+
+        prompt_lens = torch.as_tensor(
+            batch.prompt_lens,
+            device=prefix_out.device,
+            dtype=torch.long,
+        )
+        hidden_positions = prompt_lens[sample_indices] - 1 + answer_offsets
+        valid_hidden = prefix_out[sample_indices, hidden_positions]
+        valid_labels = batch.coc_labels[sample_indices, answer_offsets]
+
+        valid_logits = lm_head(valid_hidden.to(lm_head.weight.dtype))
+        token_losses = F.cross_entropy(valid_logits, valid_labels, reduction="none")
+
+        per_sample_loss_sum = token_losses.new_zeros(prefix_out.shape[0])
+        per_sample_loss_sum.scatter_add_(0, sample_indices, token_losses)
+        per_sample_token_count = valid_mask.sum(dim=1).to(token_losses.dtype)
+        per_sample_loss = per_sample_loss_sum / per_sample_token_count.clamp_min(1)
+        loss_coc_language = (
+            per_sample_loss[valid_samples].mean() * self.coc_language_loss_weight
+        )
+        return loss_coc_language, valid_ratio
+
     def forward_train(
         self,
         img=None,
@@ -1102,6 +1668,8 @@ class QwenVL3APlanningHead(nn.Module):
         gt_ego_fut_masks=None,
         gt_ego_fut_cmd=None,
         ego_status=None,
+        gt_ego_lcf_feat=None,
+        gt_ego_his_trajs=None,
         gt_occ_dense=None,
         hist_traj=None,
         ar_batch=None,
@@ -1125,12 +1693,23 @@ class QwenVL3APlanningHead(nn.Module):
         if torch.is_tensor(_gt_trajs_raw) and _gt_trajs_raw.dim() == 4 and _gt_trajs_raw.shape[1] == 1:
             _gt_trajs_raw = _gt_trajs_raw.squeeze(1)
 
+        coc_records = None
+        if self.coc_by_token:
+            sample_tokens = self._extract_sample_tokens(kwargs.get("img_metas"), int(img.shape[0]))
+            coc_records = self._get_coc_records(sample_tokens, int(img.shape[0]))
+        coc_match_count = sum(1 for r in (coc_records or []) if r is not None)
+
         batch = self._build_driving_batch(
             img=img,
             command=gt_ego_fut_cmd,
             ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
             hist_traj=hist_traj,
             gt_trajs=_gt_trajs_raw if self.enable_traj_ar else None,
+            coc_records=coc_records,
+            include_coc_answer_tokens=self.enable_coc_language_output,
+            include_coc_context=self.enable_coc_policy_prefix,
         )
 
         if isinstance(gt_agent_fut_trajs, list):
@@ -1233,7 +1812,11 @@ class QwenVL3APlanningHead(nn.Module):
         att_mask_input = None
         q_len_rounded = None
 
-        if self.attn_implementation == "flex" and not self.enable_knowledge_insulation:
+        if (
+            self.attn_implementation == "flex"
+            and not self.enable_knowledge_insulation
+            and batch.coc_answer_ids is None
+        ):
             _prompt_only_len_key = prompt_only_len if self.enable_traj_ar else -1
             _bm_key = (bsz, prefix_len, perception_len, suffix_len, _prompt_only_len_key)
             if self._cached_block_mask is None or self._cached_block_mask_key != _bm_key:
@@ -1258,19 +1841,36 @@ class QwenVL3APlanningHead(nn.Module):
             att_masks = torch.cat([prefix_att_masks, perception_att_masks, suffix_att_masks], dim=1)
             att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
             if batch.traj_answer_ids is not None:
+                traj_answer_lens = batch.traj_answer_lens
+                if traj_answer_lens is None:
+                    traj_answer_lens = batch.traj_answer_mask.sum(dim=1).tolist()
                 for b_idx in range(bsz):
                     p_len = batch.prompt_lens[b_idx]
-                    real_ans_len = int(batch.traj_answer_mask[b_idx].sum().item())
+                    real_ans_len = int(traj_answer_lens[b_idx])
                     att_2d_masks[b_idx, prefix_len:, p_len:p_len + real_ans_len] = False
             att_mask_input = self._prepare_attention_masks_4d(att_2d_masks)
+            del att_2d_masks, pad_masks, att_masks
 
         stats = {}
+        if self.enable_coc:
+            stats["coc_match_ratio"] = torch.tensor(
+                float(coc_match_count) / max(float(bsz), 1.0),
+                device=actions.device,
+            )
+            if batch.coc_answer_mask is not None:
+                stats["coc_language_valid_ratio"] = (
+                    batch.coc_answer_mask.sum(dim=1) > 0
+                ).to(dtype=torch.float32).mean()
+            stats["coc_policy_prefix_enabled"] = torch.tensor(
+                1.0 if self.enable_coc_policy_prefix else 0.0,
+                device=actions.device,
+            )
         perception_out = None
 
         if self.enable_knowledge_insulation:
             self.qwen3_vl_with_expert.qwen3_vl.language_model.config._attn_implementation = "sdpa"
-            self.qwen3_vl_with_expert.qwen3_perception_expert.config._attn_implementation = "sdpa"
-            self.qwen3_vl_with_expert.qwen3_action_expert.config._attn_implementation = "sdpa"
+            self.qwen3_vl_with_expert.perception_decoder.config._attn_implementation = "sdpa"
+            self.qwen3_vl_with_expert.action_decoder.config._attn_implementation = "sdpa"
 
             def _to_list_tuple(past_kv):
                 if hasattr(past_kv, 'key_cache'):
@@ -1373,8 +1973,7 @@ class QwenVL3APlanningHead(nn.Module):
                 )
                 return outputs, middle_layer_outputs
 
-            (outputs_embeds, _middle_layer_outs_unused) = self._apply_checkpoint(
-                forward_func,
+            forward_args = (
                 prefix_embs,
                 perception_embs,
                 suffix_embs,
@@ -1385,6 +1984,14 @@ class QwenVL3APlanningHead(nn.Module):
                 _ds_embeds,
                 _visual_pos_masks,
             )
+            if self.joint_transformer_checkpoint:
+                outputs_embeds, _middle_layer_outs_unused = self._apply_checkpoint(
+                    forward_func, *forward_args
+                )
+            else:
+                outputs_embeds, _middle_layer_outs_unused = forward_func(
+                    *forward_args
+                )
             prefix_out, perception_out, suffix_out = outputs_embeds
 
         loss_traj_ar = prefix_embs.sum() * 0.0
@@ -1402,6 +2009,13 @@ class QwenVL3APlanningHead(nn.Module):
                     ignore_index=-100,
                 )
             loss_traj_ar = (loss_sum / bsz) * self.traj_ar_loss_weight
+
+        loss_coc_language = prefix_embs.sum() * 0.0
+        if self.enable_coc_language_output and self.train_vlm and batch.coc_labels is not None:
+            loss_coc_language, coc_language_valid_ratio = self._compute_coc_language_loss(
+                batch, prefix_out, prefix_embs
+            )
+            stats["coc_language_valid_ratio"] = coc_language_valid_ratio
 
         loss_depth_val = self.compute_depth_loss(
             prefix_embs, prefix_out, prefix_input_ids, all_image_grids, gt_depth, focal, bsz
@@ -1480,7 +2094,7 @@ class QwenVL3APlanningHead(nn.Module):
             ego_out = None
 
         suffix_out_float = suffix_out[:, -self.action_horizon:].to(dtype=torch.float32)
-        model_out = self._apply_checkpoint(self.action_out_proj, suffix_out_float)
+        model_out = self.action_out_proj(suffix_out_float)
 
         t_exp = time[:, None, None].to(dtype=torch.float32)
         pred_x_gt = x_t.to(dtype=torch.float32) - t_exp * model_out
@@ -1558,8 +2172,81 @@ class QwenVL3APlanningHead(nn.Module):
         if self.enable_traj_ar and self.train_vlm:
             stats["loss_traj_ar"] = loss_traj_ar
 
+        if self.enable_coc_language_output and self.train_vlm:
+            stats["loss_coc_language"] = loss_coc_language
+
         stats.pop('loss_perception', None)
         stats.pop('loss', None)
+
+        wasp_step_scale = (
+            self._wasp_regularization_step_scale
+            if self._compute_wasp_regularization_this_step
+            else 0.0
+        )
+        wasp_zero = planning_loss.detach().new_zeros(())
+
+        if self._wasp_loss_weight > 0:
+            if wasp_step_scale > 0:
+                from .wasp import compute_wasp_regularization
+                language_wasp_raw = compute_wasp_regularization(
+                    self.qwen3_vl_with_expert.qwen3_vl.model.language_model
+                )
+                if language_wasp_raw is None:
+                    raise RuntimeError(
+                        "LLM peft_cfg uses WASP but no WASPLinear layers exist."
+                    )
+                stats["loss_wasp"] = (
+                    wasp_step_scale * self._wasp_loss_weight * language_wasp_raw
+                )
+                stats["wasp_raw"] = wasp_step_scale * language_wasp_raw.detach()
+            else:
+                stats["loss_wasp"] = wasp_zero
+                stats["wasp_raw"] = wasp_zero
+
+        if self._visual_wasp_loss_weight > 0:
+            if wasp_step_scale > 0:
+                visual_wasp_raw = (
+                    self.qwen3_vl_with_expert.visual_wasp_regularization()
+                )
+                if visual_wasp_raw is None:
+                    raise RuntimeError(
+                        "visual_wasp_cfg is enabled but no encoder WASPLinear "
+                        "layers exist."
+                    )
+                stats["loss_visual_wasp"] = (
+                    wasp_step_scale
+                    * self._visual_wasp_loss_weight
+                    * visual_wasp_raw
+                )
+                stats["visual_wasp_raw"] = (
+                    wasp_step_scale * visual_wasp_raw.detach()
+                )
+            else:
+                stats["loss_visual_wasp"] = wasp_zero
+                stats["visual_wasp_raw"] = wasp_zero
+
+        if self._visual_projector_wasp_loss_weight > 0:
+            if wasp_step_scale > 0:
+                projector_wasp_raw = (
+                    self.qwen3_vl_with_expert
+                    .visual_projector_wasp_regularization()
+                )
+                if projector_wasp_raw is None:
+                    raise RuntimeError(
+                        "visual_projector_wasp_cfg is enabled but no projector "
+                        "WASPLinear layers exist."
+                    )
+                stats["loss_projector_wasp"] = (
+                    wasp_step_scale
+                    * self._visual_projector_wasp_loss_weight
+                    * projector_wasp_raw
+                )
+                stats["projector_wasp_raw"] = (
+                    wasp_step_scale * projector_wasp_raw.detach()
+                )
+            else:
+                stats["loss_projector_wasp"] = wasp_zero
+                stats["projector_wasp_raw"] = wasp_zero
 
         return {"losses": stats}
 
@@ -1582,6 +2269,8 @@ class QwenVL3APlanningHead(nn.Module):
         gt_ego_fut_masks=None,
         gt_ego_fut_cmd=None,
         ego_status=None,
+        gt_ego_lcf_feat=None,
+        gt_ego_his_trajs=None,
         num_steps: Optional[int] = None,
         noise: Optional[torch.Tensor] = None,
         hist_traj=None,
@@ -1599,11 +2288,22 @@ class QwenVL3APlanningHead(nn.Module):
                 kwargs.get("img_metas"), permute_indices, TARGET_SENSOR_ORDER
             )
 
+        sample_tokens = None
+        coc_records = None
+        if self.coc_by_token:
+            sample_tokens = self._extract_sample_tokens(kwargs.get("img_metas"), int(img.shape[0]))
+            coc_records = self._get_coc_records(sample_tokens, int(img.shape[0]))
+
         batch = self._build_driving_batch(
             img=img,
             command=gt_ego_fut_cmd,
             ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
             hist_traj=hist_traj,
+            coc_records=coc_records,
+            include_coc_answer_tokens=False,
+            include_coc_context=False,
         )
         bsz = batch.tokenized_prompt.shape[0]
         device = batch.tokenized_prompt.device
@@ -1616,6 +2316,76 @@ class QwenVL3APlanningHead(nn.Module):
         self.qwen3_vl_with_expert.qwen3_vl.visual.config._attn_implementation = "flash_attention_2"
 
         prefix_embs, prefix_pad_masks, prefix_att_masks, all_image_grids, prefix_input_ids, deepstack_features, raw_features, prompt_only_len = self.embed_prefix(batch)
+        coc_pred_text = None
+        coc_gt_text = None
+        should_generate_coc = self.enable_coc_generate and self.coc_eval_source == "pred"
+        if should_generate_coc:
+            coc_batch = self._build_driving_batch(
+                img=img,
+                command=gt_ego_fut_cmd,
+                ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
+                hist_traj=hist_traj,
+                coc_records=coc_records,
+                include_coc_answer_tokens=False,
+                include_coc_context=False,
+                force_coc_language_prompt=True,
+            )
+            (
+                coc_prefix_embs,
+                _coc_prefix_pad_masks,
+                _coc_prefix_att_masks,
+                coc_all_image_grids,
+                coc_prefix_input_ids,
+                coc_deepstack_features,
+                _coc_raw_features,
+                _coc_prompt_only_len,
+            ) = self.embed_prefix(coc_batch)
+            coc_pred_text = self._decode_coc_from_slots(
+                coc_batch,
+                coc_prefix_embs,
+                coc_prefix_input_ids,
+                coc_all_image_grids,
+                coc_deepstack_features,
+                max_new_tokens=self.coc_generate_max_new_tokens,
+            )
+        if self.enable_coc and self.coc_eval_source in ("pred", "gt"):
+            if self.coc_eval_injection == "context":
+                coc_gt_text = [
+                    self._format_coc_context(r) if r is not None else ""
+                    for r in (coc_records or [None] * int(img.shape[0]))
+                ]
+            else:
+                coc_gt_text = [
+                    self._format_coc_language_target(r) if r is not None else ""
+                    for r in (coc_records or [None] * int(img.shape[0]))
+                ]
+
+        coc_condition_text = None
+        if self.coc_eval_source == "pred" and coc_pred_text is not None:
+            coc_condition_text = coc_pred_text
+        elif self.coc_eval_source == "gt" and coc_gt_text is not None:
+            coc_condition_text = coc_gt_text
+
+        if coc_condition_text is not None and self.coc_eval_injection != "none":
+            use_gt_record_context = (
+                self.coc_eval_source == "gt"
+                and self.coc_eval_injection == "context"
+            )
+            batch = self._build_driving_batch(
+                img=img,
+                command=gt_ego_fut_cmd,
+                ego_status=ego_status,
+            gt_ego_lcf_feat=gt_ego_lcf_feat,
+            gt_ego_his_trajs=gt_ego_his_trajs,
+                hist_traj=hist_traj,
+                coc_records=coc_records,
+                include_coc_answer_tokens=self.coc_eval_injection == "answer",
+                include_coc_context=self.coc_eval_injection == "context",
+                coc_override_texts=None if use_gt_record_context else coc_condition_text,
+            )
+            prefix_embs, prefix_pad_masks, prefix_att_masks, all_image_grids, prefix_input_ids, deepstack_features, raw_features, prompt_only_len = self.embed_prefix(batch)
 
         if prefix_embs.dtype != dtype:
             prefix_embs = prefix_embs.to(dtype)
@@ -1682,7 +2452,7 @@ class QwenVL3APlanningHead(nn.Module):
         perception_pos_ids_1d = max_prefix_pos + perception_range
         perception_pos_ids_3d = torch.stack([perception_pos_ids_1d] * 3, dim=0)
 
-        self.qwen3_vl_with_expert.qwen3_perception_expert.config._attn_implementation = self._inference_attn_impl
+        self.qwen3_vl_with_expert.perception_decoder.config._attn_implementation = self._inference_attn_impl
 
         (_, perception_out, _), past_key_values, _ = self.qwen3_vl_with_expert.forward(
             attention_mask=perception_full_att_2d_4d,
@@ -1765,6 +2535,7 @@ class QwenVL3APlanningHead(nn.Module):
             ego_status_pred = stage2_outs['ego_status_list'][-1].squeeze(1).to(torch.float32)
         else:
             ego_status_pred = x_t.new_zeros((bsz, self.ego_status_dim), dtype=torch.float32)
+        ego_status_eval = ego_status_pred.detach().cpu() if torch.is_tensor(ego_status_pred) else None
 
         if perception_len > 0:
             max_perception_pos = perception_pos_ids_1d.max(dim=-1, keepdim=True).values
@@ -1788,6 +2559,10 @@ class QwenVL3APlanningHead(nn.Module):
             "traj": traj_pred_points_meter,
             "det": det_result,
             "map": map_result,
+            "coc_pred_text": coc_pred_text,
+            "coc_gt_text": coc_gt_text,
+            "coc_sample_tokens": sample_tokens,
+            "ego_status_pred": ego_status_eval,
         }
 
     def _denoise_step(self, batch, cached_pad_masks, past_key_values, x_t, timestep, max_cached_position_ids, *, ego_status_pred: Optional[torch.Tensor] = None, use_gt_status: bool = False, hist_traj=None):
@@ -1820,7 +2595,7 @@ class QwenVL3APlanningHead(nn.Module):
             suffix_pos_ids_1d,
         ], dim=0)
 
-        self.qwen3_vl_with_expert.qwen3_action_expert.config._attn_implementation = self._inference_attn_impl
+        self.qwen3_vl_with_expert.action_decoder.config._attn_implementation = self._inference_attn_impl
 
         outputs_embeds, _, _ = self.qwen3_vl_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,

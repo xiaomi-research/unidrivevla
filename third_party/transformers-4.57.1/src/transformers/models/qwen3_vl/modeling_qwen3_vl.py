@@ -1540,7 +1540,7 @@ class Qwen3VLForConditionalGeneration(Qwen3VLPreTrainedModel, GenerationMixin):
                 if (
                     key != "cache_position"
                     and dict_to_expand[key] is not None
-                    and isinstance(dict_to_expand[key], "torch.Tensor")
+                    and isinstance(dict_to_expand[key], torch.Tensor)
                     and key not in visual_keys
                 ):
                     dict_to_expand[key] = dict_to_expand[key].repeat_interleave(expand_size, dim=0)

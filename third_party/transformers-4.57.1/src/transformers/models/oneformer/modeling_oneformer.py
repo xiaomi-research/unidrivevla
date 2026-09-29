@@ -1292,7 +1292,7 @@ class OneFormerPixelDecoder(nn.Module):
         transformer_in_channels = feature_channels[-self.num_feature_levels :]
         self.transformer_feature_strides = config.strides[-self.num_feature_levels :]
         self.feature_channels = feature_channels
-        self.level_embed = nn.Parameter("torch.Tensor"(self.num_feature_levels, config.conv_dim))
+        self.level_embed = nn.Parameter(torch.Tensor(self.num_feature_levels, config.conv_dim))
 
         # Create input projection layers
         if self.num_feature_levels > 1:

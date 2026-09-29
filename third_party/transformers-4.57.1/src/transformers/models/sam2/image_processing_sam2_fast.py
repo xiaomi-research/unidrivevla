@@ -661,14 +661,14 @@ class Sam2ImageProcessorFast(BaseImageProcessorFast):
             (`"torch.Tensor"`): Batched masks in batch_size, num_channels, height, width) format, where (height, width)
             is given by original_size.
         """
-        if isinstance(original_sizes, ("torch.Tensor", np.ndarray)):
+        if isinstance(original_sizes, (torch.Tensor, np.ndarray)):
             original_sizes = original_sizes.tolist()
         # TODO: add connected components kernel for postprocessing
         output_masks = []
         for i, original_size in enumerate(original_sizes):
             if isinstance(masks[i], np.ndarray):
                 masks[i] = torch.from_numpy(masks[i])
-            elif not isinstance(masks[i], "torch.Tensor"):
+            elif not isinstance(masks[i], torch.Tensor):
                 raise ValueError("Input masks should be a list of `torch.tensors` or a list of `np.ndarray`")
             interpolated_mask = F.interpolate(masks[i], original_size, mode="bilinear", align_corners=False)
             if apply_non_overlapping_constraints:

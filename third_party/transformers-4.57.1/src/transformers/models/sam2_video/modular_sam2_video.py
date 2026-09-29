@@ -332,9 +332,9 @@ class Sam2VideoInferenceCache:
             self._vision_features.pop(min(self._vision_features.keys()))
 
         for key, value in features.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 cached[key] = value.to(self.inference_state_device, non_blocking=True)
-            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], "torch.Tensor"):
+            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
                 cached[key] = [v.to(self.inference_state_device, non_blocking=True) for v in value]
             else:
                 cached[key] = value
@@ -348,9 +348,9 @@ class Sam2VideoInferenceCache:
         cached = self._vision_features[frame_idx]
         moved = {}
         for key, value in cached.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 moved[key] = value.to(self.inference_device, non_blocking=True)
-            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], "torch.Tensor"):
+            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
                 moved[key] = [v.to(self.inference_device, non_blocking=True) for v in value]
             else:
                 moved[key] = value
@@ -471,7 +471,7 @@ class Sam2VideoInferenceSession:
         """Add point inputs with automatic device placement."""
         device_inputs = {}
         for key, value in inputs.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 device_inputs[key] = value.to(self.inference_device, non_blocking=True)
             else:
                 device_inputs[key] = value
@@ -522,7 +522,7 @@ class Sam2VideoInferenceSession:
         # Device placement: small tensors stay on inference device, large ones go to inference state device
         if output_key in ["object_pointer", "object_score_logits"]:  # Small tensors
             self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value
-        elif isinstance(output_value, "torch.Tensor"):  # Large tensors like masks, features
+        elif isinstance(output_value, torch.Tensor):  # Large tensors like masks, features
             self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value.to(
                 self.inference_state_device, non_blocking=True
             )
@@ -551,7 +551,7 @@ class Sam2VideoInferenceSession:
         if out is None:
             return None
         value = out[output_key]
-        if isinstance(value, "torch.Tensor"):
+        if isinstance(value, torch.Tensor):
             value = value.to(self.inference_device, non_blocking=True)
         return value
 
@@ -889,7 +889,7 @@ class Sam2VideoProcessor(Sam2Processor):
             device = inference_session.inference_device
 
             # Process mask
-            if not isinstance(mask, "torch.Tensor"):
+            if not isinstance(mask, torch.Tensor):
                 mask = torch.tensor(mask, dtype=torch.bool)
             nb_dim = mask.dim()
             if nb_dim > 4 or nb_dim < 2:

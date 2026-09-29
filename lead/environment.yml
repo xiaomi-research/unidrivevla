@@ -1,0 +1,75 @@
+name: b2d_zoo
+
+# This is the Python environment used by the released LEAD training and
+# evaluation runs.  The original machine uses pip CUDA wheels, so the NVIDIA
+# driver must support CUDA 11.8 or a compatible newer driver.
+channels:
+  - defaults
+
+dependencies:
+  - python=3.8.19
+  - pip=24.2
+  - pip:
+      # Keep the CUDA build aligned with the final LEAD run.
+      - --extra-index-url https://download.pytorch.org/whl/cu118
+      - torch==2.3.1+cu118
+      - torchvision==0.18.1+cu118
+      - torchaudio==2.3.1+cu118
+
+      # OpenMMLab and distributed training.
+      - mmcv-full==1.7.2
+      - mmdet==2.28.2
+      - mmengine==0.10.7
+      - mmsegmentation==0.30.0
+      - deepspeed==0.13.5
+      - accelerate==1.0.1
+      - peft==0.12.0
+      - flash-attn==2.6.3
+
+      # The Qwen3-VL/LEAD model and data stack.
+      - transformers==4.57.1
+      - einops==0.8.1
+      - einops-exts==0.0.4
+      - timm==0.9.12
+      - numpy==1.23.5
+      - scipy==1.10.1
+      - pandas==1.1.5
+      - pillow==10.4.0
+      - opencv-python==4.8.1.78
+      - pycocotools==2.0.7
+      - nuscenes-devkit==1.1.10
+
+      # LEAD training/evaluation utilities.
+      - omegaconf==2.3.0
+      - wandb==0.24.2
+      - beartype==0.19.0
+      - jaxtyping==0.2.19
+      - jsonpickle==3.0.3
+      - filterpy==1.4.5
+      - ujson==5.9.0
+      - easydict==1.13
+      - dictor==0.1.12
+      - diskcache==5.4.0
+      - ephem==4.1.5
+      - pexpect==4.9.0
+      - psutil==5.9.8
+      - py-trees==0.8.3
+      - tabulate==0.9.0
+      - transforms3d==0.4.1
+      - tensorboard==2.14.0
+      - tensorboardX==2.6.2.2
+      - tqdm==4.66.5
+      - pyyaml==6.0.2
+      - safetensors==0.4.5
+
+# The following runtime components are deliberately not installed from PyPI:
+#
+# - Qwen3-VL model weights: set LEAD_QWEN_BASE.
+# - The Qwen3-VL Transformers source used by the run: set
+#   LEAD_TRANSFORMERS_SRC (the source tree is prepended to PYTHONPATH).
+# - MMDetection3D 1.0.0rc6 source: set LEAD_MMDET3D_ROOT.
+# - The CARLA 0.9.15 executable and Python binding: set LEAD_CARLA_ROOT and
+#   LEAD_CARLA_PYTHON_BINDING for Fail2Drive, or LEAD_CARLA_ROOT for
+#   Bench2Drive.
+# - qwen_vl_utils is supplied by the evaluation source tree or by the local
+#   environment and is synchronized by run_unidrivevla_lead_eval_8gpu.sh.

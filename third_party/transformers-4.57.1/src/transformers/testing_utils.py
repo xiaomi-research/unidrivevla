@@ -2538,7 +2538,7 @@ def nested_simplify(obj, decimals=3):
         return {nested_simplify(k, decimals): nested_simplify(v, decimals) for k, v in obj.items()}
     elif isinstance(obj, (str, int, np.int64)) or obj is None:
         return obj
-    elif is_torch_available() and isinstance(obj, "torch.Tensor"):
+    elif is_torch_available() and isinstance(obj, torch.Tensor):
         return nested_simplify(obj.tolist(), decimals)
     elif is_tf_available() and tf.is_tensor(obj):
         return nested_simplify(obj.numpy().tolist())
@@ -3848,7 +3848,7 @@ def _format_tensor(t, indent_level=0, sci_mode=None):
     """Format torch's tensor in a pretty way to be shown 👀 in the test report."""
 
     # `torch.testing.assert_close` could accept python int/float numbers.
-    if not isinstance(t, "torch.Tensor"):
+    if not isinstance(t, torch.Tensor):
         t = torch.tensor(t)
 
     # Simply make the processing below simpler (not to hande both case)
@@ -3951,7 +3951,7 @@ def _format_py_obj(obj, indent=0, mode="", cache=None, prefix=""):
             return cache[(id(obj), indent, mode, prefix)]
 
     # special format method for `"torch.Tensor"`
-    if str(obj.__class__) == "<class '"torch.Tensor"'>":
+    if str(obj.__class__) == "<class 'torch.Tensor'>":
         return _format_tensor(obj)
 
     elif obj.__class__.__name__ == "str":

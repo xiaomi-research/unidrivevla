@@ -279,7 +279,7 @@ class CsmGenerationMixin(GenerationMixin):
             )
             codebook_ids = (
                 depth_decoder_outputs
-                if isinstance(depth_decoder_outputs, "torch.Tensor")
+                if isinstance(depth_decoder_outputs, torch.Tensor)
                 else depth_decoder_outputs.sequences
             )
             # remove the place holder in position 0
@@ -460,7 +460,7 @@ class CsmGenerationMixin(GenerationMixin):
             **kwargs,
         )
 
-        generate_returned_dict = not isinstance(generate_output, "torch.Tensor")
+        generate_returned_dict = not isinstance(generate_output, torch.Tensor)
         audio = None
         if output_audio:
             generated_audio_codes = generate_output.sequences if generate_returned_dict else generate_output

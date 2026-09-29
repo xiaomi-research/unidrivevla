@@ -2327,7 +2327,7 @@ class JukeboxModel(JukeboxPreTrainedModel):
 
     def split_batch(self, obj, n_samples, split_size):
         n_passes = (n_samples + split_size - 1) // split_size
-        if isinstance(obj, "torch.Tensor"):
+        if isinstance(obj, torch.Tensor):
             return torch.split(obj, split_size, dim=0)
         elif isinstance(obj, list):
             return list(zip(*[torch.split(item, split_size, dim=0) for item in obj]))

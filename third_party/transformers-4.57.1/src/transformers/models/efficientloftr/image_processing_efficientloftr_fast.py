@@ -57,13 +57,13 @@ def _is_valid_image(image):
 def flatten_pair_images(images):
     # Handle the pair validation and flattening similar to slow processor
     if isinstance(images, list):
-        if len(images) == 2 and all((_is_valid_image(image) or isinstance(image, "torch.Tensor")) for image in images):
+        if len(images) == 2 and all((_is_valid_image(image) or isinstance(image, torch.Tensor)) for image in images):
             # Single pair of images - keep as is, they'll be processed by the base class
             return images
         elif all(
             isinstance(image_pair, list)
             and len(image_pair) == 2
-            and all(_is_valid_image(image) or isinstance(image, "torch.Tensor") for image in image_pair)
+            and all(_is_valid_image(image) or isinstance(image, torch.Tensor) for image in image_pair)
             for image_pair in images
         ):
             # Multiple pairs - flatten them

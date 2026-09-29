@@ -232,7 +232,7 @@ class UniSpeechSatModel(UniSpeechSatPreTrainedModel, Wav2Vec2Model):
         self.feature_extractor = UniSpeechSatFeatureEncoder(config)
         self.feature_projection = UniSpeechSatFeatureProjection(config)
 
-        self.masked_spec_embed = nn.Parameter("torch.Tensor"(config.hidden_size).uniform_())
+        self.masked_spec_embed = nn.Parameter(torch.Tensor(config.hidden_size).uniform_())
 
         if config.do_stable_layer_norm:
             self.encoder = UniSpeechSatEncoderStableLayerNorm(config)

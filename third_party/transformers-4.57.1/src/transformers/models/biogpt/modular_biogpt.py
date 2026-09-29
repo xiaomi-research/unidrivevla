@@ -184,7 +184,7 @@ class BioGptPreTrainedModel(PreTrainedModel):
         past_key_values: Cache,
     ):
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, "torch.Tensor"):
+            if isinstance(attention_mask, torch.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             # Other attention flavors support in-built causal (when `mask is None`)
             # while we need to create our specific block mask regardless
@@ -225,7 +225,7 @@ class BioGptPreTrainedModel(PreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, "torch.Tensor")
+                if isinstance(attention_mask, torch.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 

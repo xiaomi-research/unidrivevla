@@ -224,9 +224,9 @@ class EinLinear(nn.Module):
         self.n_models = n_models
         self.out_features = out_features
         self.in_features = in_features
-        self.weight = nn.Parameter("torch.Tensor"(n_models, out_features, in_features))
+        self.weight = nn.Parameter(torch.Tensor(n_models, out_features, in_features))
         if bias:
-            self.bias = nn.Parameter("torch.Tensor"(n_models, out_features))
+            self.bias = nn.Parameter(torch.Tensor(n_models, out_features))
         else:
             self.register_parameter("bias", None)
 

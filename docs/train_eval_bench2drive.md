@@ -1,69 +1,53 @@
 # Training and Evaluation on Bench2Drive
 
-## Training
-
-### Stage 1
-
-```bash
-cd Bench2Drive
-bash tools/dist_train.sh projects/configs/unidrivevla_b2d_stage1_unified_2b.py 8
-```
-
-### Stage 2
-
-```bash
-cd Bench2Drive
-bash tools/dist_train.sh projects/configs/unidrivevla_b2d_stage2_unified_2b.py 8
-```
+The published LEAD final model has its complete training and evaluation chain
+under `lead/`. This page documents that final chain. The repository does not
+publish a separate generic Bench2Drive training recipe.
 
 ---
 
-## Closed-Loop Evaluation
+## LEAD closed-loop evaluation
 
-### 1. Create Multi-Route Splits
+Read [`lead/README.md`](../lead/README.md) for the Qwen initialization, the
+three-epoch Stage 1 to nine-epoch motion Stage 3 chain, the `b2d_zoo`
+environment, external asset requirements, and the expected metric sequences.
 
-```bash
-python ./bench2drive/tools/split_xml.py
-```
-
-### 2. Configure Paths
-
-Set `WORK_DIR` and `CARLA_ROOT` in the evaluation script:
+### Bench2Drive final evaluation
 
 ```bash
-# bench2drive/leaderboard/scripts/run_evaluation.sh
-export WORK_DIR=/path/to/unidrivevla/Bench2Drive
-export CARLA_ROOT=/path/to/unidrivevla/Bench2Drive/carla
+cd lead
+export LEAD_CHECKPOINT=/path/to/iter_17037/global_step17037/mp_rank_00_model_states.pt
+export LEAD_QWEN_BASE=/path/to/Qwen3-VL-2B-Instruct
+export LEAD_PYTHON_BIN=/path/to/b2d_zoo/bin/python
+export LEAD_CARLA_ROOT=/path/to/carla
+export LEAD_ROUTE_SOURCE=/path/to/bench2drive220_routes
+
+LEAD_STAGE3_DS87_EPOCH9_GPU_IDS=0,1,2,3,4,5,6,7 \
+bash launch_latest_4hz_stage3_ds87_epoch9_comfort_full220.sh
 ```
 
-### 3. Run Evaluation
+This is the final Bench2Drive full-220 entrypoint. It validates the config,
+checkpoint identity, motion anchor, CARLA installation, and route count before
+starting route workers.
 
-Before running, set the following variables in `bench2drive/leaderboard/scripts/run_evaluation_multi_unidrivevla.sh`, or pass them as environment variables:
+### Fail2Drive final evaluation
 
-| Variable | Description |
-|----------|-------------|
-| `WORK_DIR` | Absolute path to the `Bench2Drive/` directory |
-| `CHECKPOINT` | Path to the model weights (`.pt` file) |
-| `SAVE_PATH` | Output directory for evaluation results (default: `evaluation/unidrivevla_b2d`) |
+Fail2Drive is a separate dataset and CARLA installation. Use the release-local
+single-lidar Generalization44 wrapper; it does not use the upstream
+`official_tfv6_creeping` command:
 
 ```bash
-cd Bench2Drive
-WORK_DIR=/path/to/unidrivevla/Bench2Drive \
-CHECKPOINT=/path/to/UniDriveVLA_Stage2_Bench2Drive_2B.pt \
-SAVE_PATH=evaluation/unidrivevla_b2d \
-bash bench2drive/leaderboard/scripts/run_evaluation_multi_unidrivevla.sh
+cd lead
+export LEAD_CHECKPOINT=/path/to/iter_17037/global_step17037/mp_rank_00_model_states.pt
+export LEAD_QWEN_BASE=/path/to/Qwen3-VL-2B-Instruct
+export LEAD_PYTHON_BIN=/path/to/b2d_zoo/bin/python
+export LEAD_CARLA_ROOT=/path/to/fail2drive-carla
+export LEAD_CARLA_PYTHON_BINDING=/path/to/fail2drive-carla/PythonAPI/carla/py38
+export LEAD_ROUTE_SOURCE=/path/to/fail2drive_routes
+
+LEAD_STAGE3_DS87_EPOCH9_LONGEST6_GPU_IDS=0,1,2,3,4,5,6,7 \
+bash launch_latest_4hz_stage3_ds87_epoch9_fail2drive_seed0_single_lidar_creeping_visualization_generalization44_8gpu.sh
 ```
 
-### 4. Compute Metrics
-
-```bash
-python ./bench2drive/tools/statistic_route_json.py \
-    --route_dir evaluation/unidrivevla_b2d
-```
-
-### 5. Generate Videos (Optional)
-
-```bash
-python ./bench2drive/tools/generate_video.py \
-    --folder_dir evaluation/unidrivevla_b2d
-```
+Bench2Drive and Fail2Drive use separate route sources and metrics, while the
+tracking-ID repair is shared by the single published LEAD runtime.

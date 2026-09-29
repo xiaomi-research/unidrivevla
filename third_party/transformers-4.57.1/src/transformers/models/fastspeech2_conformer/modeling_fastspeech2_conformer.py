@@ -384,8 +384,8 @@ class FastSpeech2ConformerAttention(nn.Module):
         self.linear_pos = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
         # these two learnable bias are used in matrix c and matrix d
         # as described in https://huggingface.co/papers/1901.02860 Section 3.3
-        self.pos_bias_u = nn.Parameter("torch.Tensor"(self.num_heads, self.head_dim))
-        self.pos_bias_v = nn.Parameter("torch.Tensor"(self.num_heads, self.head_dim))
+        self.pos_bias_u = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
+        self.pos_bias_v = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
 
     def shift_relative_position_tensor(self, pos_tensor):
         """

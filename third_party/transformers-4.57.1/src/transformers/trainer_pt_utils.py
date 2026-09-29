@@ -70,7 +70,7 @@ def get_dataloader_sampler(dataloader):
 
 
 def atleast_1d(tensor_or_array: Union["torch.Tensor", np.ndarray]):
-    if isinstance(tensor_or_array, "torch.Tensor"):
+    if isinstance(tensor_or_array, torch.Tensor):
         if hasattr(torch, "atleast_1d"):
             tensor_or_array = torch.atleast_1d(tensor_or_array)
         elif tensor_or_array.ndim < 1:
@@ -121,13 +121,13 @@ def nested_concat(tensors, new_tensors, padding_index=-100):
     Concat the `new_tensors` to `tensors` on the first dim and pad them on the second if needed. Works for tensors or
     nested list/tuples/dict of tensors.
     """
-    if not (isinstance(tensors, "torch.Tensor") and isinstance(new_tensors, "torch.Tensor")):
+    if not (isinstance(tensors, torch.Tensor) and isinstance(new_tensors, torch.Tensor)):
         assert type(tensors) is type(new_tensors), (
             f"Expected `tensors` and `new_tensors` to have the same type but found {type(tensors)} and {type(new_tensors)}."
         )
     if isinstance(tensors, (list, tuple)):
         return type(tensors)(nested_concat(t, n, padding_index=padding_index) for t, n in zip(tensors, new_tensors))
-    elif isinstance(tensors, "torch.Tensor"):
+    elif isinstance(tensors, torch.Tensor):
         return torch_pad_and_concatenate(tensors, new_tensors, padding_index=padding_index)
     elif isinstance(tensors, Mapping):
         return type(tensors)(
@@ -153,7 +153,7 @@ def find_batch_size(tensors):
             result = find_batch_size(value)
             if result is not None:
                 return result
-    elif isinstance(tensors, ("torch.Tensor", np.ndarray)):
+    elif isinstance(tensors, (torch.Tensor, np.ndarray)):
         return tensors.shape[0] if len(tensors.shape) >= 1 else None
 
 
@@ -179,7 +179,7 @@ def nested_detach(tensors):
         return type(tensors)(nested_detach(t) for t in tensors)
     elif isinstance(tensors, Mapping):
         return type(tensors)({k: nested_detach(t) for k, t in tensors.items()})
-    return tensors.detach() if isinstance(tensors, "torch.Tensor") else tensors
+    return tensors.detach() if isinstance(tensors, torch.Tensor) else tensors
 
 
 def nested_xla_mesh_reduce(tensors, name):
@@ -638,9 +638,9 @@ class LengthGroupedSampler(Sampler):
                     f"'{model_input_name}' key."
                 )
             lengths = [len(feature[model_input_name]) for feature in dataset]
-        elif isinstance(lengths, "torch.Tensor"):
+        elif isinstance(lengths, torch.Tensor):
             logger.info(
-                "If lengths is a "torch.Tensor", LengthGroupedSampler will be slow. Converting lengths to List[int]..."
+                "If lengths is a torch.Tensor, LengthGroupedSampler will be slow. Converting lengths to List[int]."
             )
             lengths = lengths.tolist()
 
@@ -698,9 +698,9 @@ class DistributedLengthGroupedSampler(DistributedSampler):
                     f"'{model_input_name}' key."
                 )
             lengths = [len(feature[model_input_name]) for feature in dataset]
-        elif isinstance(lengths, "torch.Tensor"):
+        elif isinstance(lengths, torch.Tensor):
             logger.info(
-                "If lengths is a "torch.Tensor", DistributedLengthGroupedSampler will be slow. Converting lengths to"
+                "If lengths is a torch.Tensor, DistributedLengthGroupedSampler will be slow. Converting lengths to"
                 " List[int]..."
             )
             lengths = lengths.tolist()
@@ -1185,7 +1185,7 @@ if is_sagemaker_mp_enabled():
             return type(tensor)(smp_gather(t) for t in tensor)
         elif isinstance(tensor, dict):
             return type(tensor)({k: smp_gather(v) for k, v in tensor.items()})
-        elif not isinstance(tensor, "torch.Tensor"):
+        elif not isinstance(tensor, torch.Tensor):
             raise TypeError(
                 f"Can't gather the values of type {type(tensor)}, only of nested list/tuple/dicts of tensors."
             )

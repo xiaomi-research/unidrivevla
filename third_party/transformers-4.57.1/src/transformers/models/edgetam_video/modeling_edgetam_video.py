@@ -827,9 +827,9 @@ class EdgeTamVideoInferenceCache:
             self._vision_features.pop(min(self._vision_features.keys()))
 
         for key, value in features.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 cached[key] = value.to(self.inference_state_device, non_blocking=True)
-            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], "torch.Tensor"):
+            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
                 cached[key] = [v.to(self.inference_state_device, non_blocking=True) for v in value]
             else:
                 cached[key] = value
@@ -843,9 +843,9 @@ class EdgeTamVideoInferenceCache:
         cached = self._vision_features[frame_idx]
         moved = {}
         for key, value in cached.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 moved[key] = value.to(self.inference_device, non_blocking=True)
-            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], "torch.Tensor"):
+            elif isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
                 moved[key] = [v.to(self.inference_device, non_blocking=True) for v in value]
             else:
                 moved[key] = value
@@ -966,7 +966,7 @@ class EdgeTamVideoInferenceSession:
         """Add point inputs with automatic device placement."""
         device_inputs = {}
         for key, value in inputs.items():
-            if isinstance(value, "torch.Tensor"):
+            if isinstance(value, torch.Tensor):
                 device_inputs[key] = value.to(self.inference_device, non_blocking=True)
             else:
                 device_inputs[key] = value
@@ -1017,7 +1017,7 @@ class EdgeTamVideoInferenceSession:
         # Device placement: small tensors stay on inference device, large ones go to inference state device
         if output_key in ["object_pointer", "object_score_logits"]:  # Small tensors
             self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value
-        elif isinstance(output_value, "torch.Tensor"):  # Large tensors like masks, features
+        elif isinstance(output_value, torch.Tensor):  # Large tensors like masks, features
             self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value.to(
                 self.inference_state_device, non_blocking=True
             )
@@ -1046,7 +1046,7 @@ class EdgeTamVideoInferenceSession:
         if out is None:
             return None
         value = out[output_key]
-        if isinstance(value, "torch.Tensor"):
+        if isinstance(value, torch.Tensor):
             value = value.to(self.inference_device, non_blocking=True)
         return value
 

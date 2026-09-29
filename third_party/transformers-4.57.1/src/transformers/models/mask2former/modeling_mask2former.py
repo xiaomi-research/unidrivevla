@@ -1219,7 +1219,7 @@ class Mask2FormerPixelDecoder(nn.Module):
 
         self.transformer_feature_strides = config.feature_strides[-self.num_feature_levels :]
         self.feature_channels = feature_channels
-        self.level_embed = nn.Parameter("torch.Tensor"(self.num_feature_levels, feature_dim))
+        self.level_embed = nn.Parameter(torch.Tensor(self.num_feature_levels, feature_dim))
 
         # Create input projection layers
         if self.num_feature_levels > 1:

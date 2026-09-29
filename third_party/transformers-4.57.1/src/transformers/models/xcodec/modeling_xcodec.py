@@ -218,7 +218,7 @@ class XcodecEuclideanCodebook(nn.Module):
         super().__init__()
         embed = torch.zeros(config.codebook_size, config.codebook_dim)
         self.codebook_size = config.codebook_size
-        self.register_buffer("inited", "torch.Tensor"([True]))
+        self.register_buffer("inited", torch.Tensor([True]))
         self.register_buffer("cluster_size", torch.zeros(config.codebook_size))
         self.register_buffer("embed", embed)
         self.register_buffer("embed_avg", embed.clone())
