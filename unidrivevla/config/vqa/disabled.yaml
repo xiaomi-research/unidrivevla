@@ -1,0 +1,8 @@
+enabled: false
+mode: combined
+jsonl_paths: []
+max_length: 2048
+batch_size: 2
+num_workers: 2
+max_pixels: 100000
+fix_image_size: null

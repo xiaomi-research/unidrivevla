@@ -1,0 +1,11 @@
+# @package _global_
+# the official stage 2: from the stage-1 weights (STAGE1_CHECKPOINT or agent.checkpoint_path, a last.ckpt of stage 1),
+# the motion task on, the VLM and its LoRA frozen, lr 1e-4, the dataset's stage2_max_epochs
+agent:
+  checkpoint_path: ${oc.env:STAGE1_CHECKPOINT}
+  with_motion: true
+  train_vlm: false
+  lr: 1.0e-4
+  gradient_checkpointing: false   # frozen VLM prefix; measure full-model speed and memory on the target GPU
+train:
+  max_epochs: ${stage2_max_epochs}

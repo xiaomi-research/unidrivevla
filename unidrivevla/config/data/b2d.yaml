@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - /profile@profile: b2d
+
+data_loader: b2d
+b2d:
+  info_dir: ${oc.env:B2D_INFOS,/data/yongkangli/UniDriveVLA/Bench2Drive/data/infos}
+  data_root: ${oc.env:B2D_ROOT,/data/yongkangli/UniDriveVLA/Bench2Drive/data/bench2drive}
+  map_types: ${profile.map_classes}
+
+agent:                   # the official Bench2Drive stage-1 recipe
+  weight_decay: 0.01
+  warmup_steps: 250      # its 1000 mmcv iterations under 4-step accumulation
+  warmup_start: 0.01
+  min_lr_ratio: 0.05
+train:
+  max_epochs: 10
+  ema_decay: 0.0         # no EMAHook
+stage2_max_epochs: 5
+augment:
+  geometry: {flip_p: 0.5, rotate_deg: 5.4}   # its ResizeCropFlipImage (rand_flip, rot_lim)
+  photometric: true                           # its PhotoMetricDistortionMultiViewImage
+
+evaluator:
+  name: b2d
+  every_n_epochs: 1
+  on_end: true

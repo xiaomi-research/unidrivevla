@@ -16,6 +16,10 @@ April 3, 2026
 
 ---
 
+## Native training package
+
+The decoupled training, multi-source/VQA scheduling, checkpoint and benchmark adapters live in [`unidrivevla/`](unidrivevla/README.md). See its [implementation and validation matrix](unidrivevla/docs/ROADMAP.md) for supported interfaces and the remaining full-model GPU and official benchmark gates. The original `nuScenes/` and `Bench2Drive/` trees remain the fixed main reference.
+
 ## News
 
 - 🔥 **[2026-04-03]** We release the paper, training/inference code, and model weights of UniDriveVLA!

@@ -1,0 +1,24 @@
+# @package _global_
+# Licensed PhysicalAI-AV raw data is converted offline, then this training reader uses only NPZ/PNG cache assets.
+defaults:
+  - /profile@profile: physicalai
+  - _self_
+
+data_loader: physicalai
+physicalai:
+  cache_root: ${oc.env:PHYSICALAI_CACHE_ROOT,/data/yongkangli/PhysicalAI-AV/unidrivevla_cache}
+  train_split: train
+  val_split: val
+  test_split: test
+
+train:
+  max_epochs: 10
+  ema_decay: 0.0
+stage2_max_epochs: 0
+augment: null
+
+# UniDriveVLA computes planning L2 on validation targets; no synthetic detection/map or source metric is claimed.
+evaluator:
+  name: physicalai
+  every_n_epochs: 0
+  on_end: true

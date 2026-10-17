@@ -1,0 +1,5 @@
+# For NAVSIM's run_dataset_caching.py: the canonical NAVSIM builders, no network.
+_target_: unidrivevla.adapters.navsim_agent.UniDriveVLANavsimAgent
+_convert_: all
+policy: null
+cache_mode: true

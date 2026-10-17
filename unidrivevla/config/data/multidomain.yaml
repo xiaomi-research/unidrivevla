@@ -1,0 +1,54 @@
+# @package _global_
+defaults:
+  - /profile@profiles.nuscenes: nuscenes
+  - /profile@profiles.b2d: b2d
+  - /profile@profiles.navsim: navsim
+  - /default_common
+  - /default_evaluation
+  - /default_train_val_test_log_split
+
+data_loader: multidomain
+multidomain:
+  sources:
+    - name: nuscenes
+      loader: nuscenes
+      weight: 1.0
+      augment:
+        geometry: {flip_p: 0.5, rotate_deg: 5.4}
+        photometric: true
+    - name: b2d
+      loader: b2d
+      weight: 1.0
+      augment:
+        geometry: {flip_p: 0.5, rotate_deg: 5.4}
+        photometric: true
+    - name: navsim
+      loader: navsim
+      weight: 1.0
+      augment: null
+
+nuscenes:
+  info_dir: ${oc.env:NUSCENES_INFOS,/data/yongkangli/UniDriveVLA/nuScenes/data/infos}
+  path_root: ${oc.env:NUSCENES_PATH_ROOT,/data/yongkangli/UniDriveVLA/nuScenes}
+  data_root: ${oc.env:NUSCENES_ROOT,/data/yongkangli/UniDriveVLA/nuScenes/data/nuscenes}
+  version: ${oc.env:NUSCENES_VERSION,v1.0-trainval}
+  occ_root: ${oc.env:NUSCENES_OCC_ROOT}
+b2d:
+  info_dir: ${oc.env:B2D_INFOS,/data/yongkangli/UniDriveVLA/Bench2Drive/data/infos}
+  data_root: ${oc.env:B2D_ROOT,/data/yongkangli/UniDriveVLA/Bench2Drive/data/bench2drive}
+  map_types: ${profiles.b2d.map_classes}
+
+split: trainval
+cache_path: ${oc.env:NAVSIM_EXP_ROOT,/data/yongkangli/NAVSIM/exp}/unidrivevla_sample_cache
+use_cache_without_dataset: true
+force_cache_computation: false
+train:
+  max_epochs: 10
+  ema_decay: 0.0
+stage2_max_epochs: 5
+augment: null
+
+evaluator:
+  name: [nuscenes, b2d, navsim]
+  every_n_epochs: 1
+  on_end: true

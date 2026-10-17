@@ -1,0 +1,24 @@
+# @package _global_
+# NAVSIM 1.1 or 2.0, whichever devkit is on PYTHONPATH. The launcher passes train_test_split (navtrain).
+defaults:
+  - /profile@profile: navsim
+  - /default_common
+  - /default_evaluation
+  - /default_train_val_test_log_split
+
+data_loader: navsim
+split: trainval
+cache_path: ${oc.env:NAVSIM_EXP_ROOT,/data/yongkangli/NAVSIM/exp}/unidrivevla_sample_cache
+use_cache_without_dataset: true
+force_cache_computation: false
+
+train:                   # no official NAVSIM recipe: the stage-1 one of the agent's defaults (stage 2 needs
+  max_epochs: 10         # stage2_max_epochs set)
+  ema_decay: 0.0
+augment: null            # no official recipe to take augmentation from; frames are independent (no world poses)
+
+evaluator:
+  name: navsim
+  split: navtest
+  every_n_epochs: 0
+  on_end: true

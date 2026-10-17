@@ -1,0 +1,37 @@
+# Training env. Versions are the ones imported by the navsim conda env
+# (Python 3.9.25, torch 2.6.0+cu124). Install torch before flash-attn.
+#
+#   pip install torch==2.6.0+cu124 torchvision==0.21.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+#   pip install flash-attn==2.7.4.post1 --no-build-isolation  # optional attention extra, after torch
+#
+# FlashAttention is deliberately not in this base requirements file: it builds against the installed CUDA torch.
+# Imported cv2 is 4.11.0 from opencv-python-headless (opencv-python==4.9.0.80 is also
+# present in that env and is not the module that gets imported).
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+transformers==4.57.6
+peft==0.17.1
+accelerate==1.10.1
+hydra-core==1.2.0
+omegaconf==2.3.1
+numpy==1.26.4
+einops==0.8.2
+timm==1.0.29
+safetensors==0.7.0
+qwen-vl-utils==0.0.14
+opencv-python-headless==4.11.0.86
+pillow==11.3.0
+shapely==2.0.7
+scipy==1.13.1
+scikit-learn==1.6.1
+scikit-image==0.24.0
+pyquaternion==0.9.9
+packaging==26.3
+tqdm==4.70.0
+
+# NAVSIM training and PDMS also need the devkit on PYTHONPATH and nuplan-devkit==1.2.0
+# (the navsim env installs nuplan-devkit from git tag nuplan-devkit-v1.2). See README.

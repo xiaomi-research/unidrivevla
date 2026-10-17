@@ -1,0 +1,48 @@
+# Bench2Drive main checkpoint frame: raw LiDAR axes, with the LiDAR origin preserved.
+name: b2d
+ddp_reduce_dtype: bf16         # main's adam_zero1_bf16.json communication_data_type
+train_precision: bf16
+ddp_cast_frozen_parameters: true  # match main's floating-parameter cast; buffers retain their loaded dtype
+ar_loss_weight: 1.0           # Bench2Drive main head default
+lr_microstep: true            # match main's LR hook, which updates before every data micro-batch
+official_command_text: true   # reproduce main's one-hot flatten read; false is an explicit ablation
+frame: lidar
+cameras: [front, front_left, front_right, back_left, back_right, back]
+view_tokens: ["<FRONT_VIEW>", "<FRONT_LEFT_VIEW>", "<FRONT_RIGHT_VIEW>", "<BACK_LEFT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>"]
+horizon: 6
+motion_steps: 6
+commands: [left, right, straight, lane_follow, change_lane_left, change_lane_right]
+command_prompts: ["TURN LEFT", "TURN RIGHT", "GO STRAIGHT", "LANE FOLLOW", "CHANGE LANE LEFT", "CHANGE LANE RIGHT"]
+status_layout: [vel_x, acc_x, acc_y, rot_x, rot_y, steer]   # vel_x: the signed ego_vel[0] the official status reads
+det_classes: [car, van, truck, bicycle, traffic_sign, traffic_cone, traffic_light, pedestrian, others]
+box_range: [-55.0, -55.0, 55.0, 55.0]
+box_radius: 55.0
+yawless_classes: [traffic_cone]
+map_classes: [Broken, Solid, SolidSolid, Center]
+map_roi: [30.0, 60.0]       # official map_roi_size=(30, 60), in native LiDAR coordinate order
+ground_height: -1.84023
+ego_box: [0.0, 0.5, -1.095, 4.89, 1.84, 1.49, 0.0] # EgoInstanceBank anchor_type='b2d'
+train_resize: 0.6              # its data_aug_conf resize_lim: 1600 x 900 -> 960 x 540, cropped to image_hw
+anchors_dir: ${oc.env:UNIDRIVE_NATIVE_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors}/native/b2d
+delta_mean: [-0.0222, 2.0249]  # official FlowPlanningLoss delta_mu, raw LiDAR order
+delta_std: [0.6720, 1.8586]
+zero_velocity_classes: [traffic_sign, traffic_cone, traffic_light]   # cached with zero velocity, as its instance bank
+decoder_norm: false            # its unified decoder has no norm_layer: the "norm" operations are skipped
+prefix_max_len: 3670           # fixed length used by the official Bench2Drive main
+official_attention_mask: true  # main FlexAttention attends to fixed-length PAD positions
+prompt_style: b2d              # speed / acceleration prompt, no PT_HIST
+enable_knowledge_insulation: false  # explicit main ablation; includes prompt-token CE when enabled
+use_hist_traj: false           # the official head has no history token
+use_occ_tokens: false          # no occupancy queries in the perception stream
+keypoint_from_anchor: true     # learnable points from the anchor embed
+box_size_clamp: [-5.0, 5.0]
+inference_attn_impl: eager
+cast_inference_mask: false
+detach_plan_geometry: true
+summed_planning_loss: true     # main also returns their sum as `loss`; false changes the official objective
+processor_use_fast: false
+cast_stream_dtype: true
+nan_to_num_cost: true
+ego_keypoints:                 # the official Bench2Drive config's ego query
+  num_learnable_pts: 12
+  fix_scale: [[0.45, 0.0, 0.0]]

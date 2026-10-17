@@ -1,0 +1,25 @@
+# LEAD-main CARLA logs, converted through the official 123D-backed SceneLoader.
+name: lead
+frame: ego
+prompt_style: ego
+cameras: [front, front_left, front_right, back_right, back, back_left]
+view_tokens: ["<FRONT_VIEW>", "<FRONT_LEFT_VIEW>", "<FRONT_RIGHT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>", "<BACK_LEFT_VIEW>"]
+image_hw: [544, 544]
+horizon: 6
+motion_steps: 6
+commands: [unknown]
+command_prompts: ["UNKNOWN"]
+status_layout: [vel_x, vel_y, acc_x, acc_y]
+# Non-planning label tasks are masked off; vocabularies only size inactive heads.
+det_classes: [car, pedestrian, bicycle, traffic_light, traffic_sign, generic_object]
+map_classes: [ped_crossing, divider, boundary]
+box_range: [-60.0, -60.0, 60.0, 60.0]
+map_roi: [60.0, 30.0]
+ego_box: [1.64855, 0.0, 0.74514, 4.89238, 1.83671, 1.49028, 0.0]  # LEAD's Lincoln MKZ dimensions
+anchors_dir: ${oc.env:UNIDRIVE_EXTERNAL_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors/nuscenes}  # transfer structural anchors; override for a calibrated source-specific set
+delta_mean: [0.0, 0.0]    # fit tools/data_stats.py on the actual cache before production training
+delta_std: [1.0, 1.0]
+ground_height: 0.0
+train_resize: null
+use_occ_tokens: false
+prefix_max_len: 0

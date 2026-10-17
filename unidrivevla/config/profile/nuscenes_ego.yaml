@@ -1,0 +1,33 @@
+# Legacy canonical ego-axis frame for checkpoints trained before the native LiDAR profile.
+name: nuscenes
+ar_loss_weight: 0.1           # legacy checkpoint recipe; same as nuScenes main
+official_command_text: true   # reproduce main's one-hot flatten read; false is an explicit ablation
+frame: ego
+cameras: [front, front_left, front_right, back_left, back_right, back]
+view_tokens: ["<FRONT_VIEW>", "<FRONT_LEFT_VIEW>", "<FRONT_RIGHT_VIEW>", "<BACK_LEFT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>"]
+horizon: 6
+motion_steps: 12
+commands: [right, left, straight]
+command_prompts: ["TURN RIGHT ", "TURN LEFT  ", "GO STRAIGHT"]
+status_layout: [acc_x, acc_y, acc_z, rot_x, rot_y, rot_z]   # the 6 CAN bus values the official head reads
+det_classes: [car, truck, construction_vehicle, bus, trailer, barrier, motorcycle, bicycle, pedestrian, traffic_cone]
+# slack past the 55 m lidar-frame circle (applied in data/nuscenes.py): after lidar2ego's roll a kept
+# box's ego xy can sit just outside ±55, and an ego-frame radius is not the CircleObjectRangeFilter
+box_range: [-80.0, -80.0, 80.0, 80.0]
+box_radius: null
+reverse_classes: [barrier]
+yawless_classes: [traffic_cone]
+map_classes: [ped_crossing, divider, boundary]
+map_roi: [60.0, 30.0]
+map_clip: false                # the extractor's lines are cut to the LiDAR-frame ROI; VectorizeMap does not cut again
+ground_height: -1.84023
+ego_box: [0.5, 0.0, -1.06, 4.08, 1.73, 1.56, 0.0]
+motion_velocity_weight: 0.5    # the official stage 2's detection reg_weights (Bench2Drive's keeps 0)
+train_resize: 0.6              # its data_aug_conf resize_lim: 1600 x 900 -> 960 x 540, cropped to image_hw
+occ_classes: 18
+occ_format: occ3d
+anchors_dir: ${oc.env:UNIDRIVE_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors}/nuscenes
+delta_mean: [2.2707, -0.0233]   # the official LiDAR-frame values on the ego axes
+delta_std: [1.8668, 0.3427]
+prefix_max_len: 0              # legacy trained behavior: batch-dynamic prefix
+official_attention_mask: false

@@ -1,0 +1,24 @@
+_target_: unidrivevla.adapters.multidomain.MultiProfilePolicy
+_convert_: all
+profiles: ${profiles}
+vlm_path: ${oc.env:VLM_PRETRAINED_PATH,/data/yongkangli/ckpts/Qwen3-VL-2B-Instruct}
+vae_path: ${oc.env:OCCWORLD_VAE_PATH,null}
+lr: 2.0e-4
+weight_decay: 1.0e-7
+warmup_steps: 125
+warmup_start: 0.3333
+min_lr_ratio: 1.0e-3
+vlm_lr_mult: 0.5
+train_vlm: true
+lora: {r: 64, lora_alpha: 128, lora_dropout: 0.0, bias: none,
+       target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+with_motion: false
+checkpoint_path: null
+checkpoint_frame: null  # legacy full multi-profile weights can declare a mapping of profile names to frames
+initial_profile: null
+exact_resume: ${oc.select:train.exact_resume,false}
+attn_implementation: sdpa
+gradient_checkpointing: true
+cache_frozen_prefix: true
+dtype: bfloat16
+vlm_variant: 2b

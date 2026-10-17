@@ -1,0 +1,31 @@
+# @package _global_
+defaults:
+  - /profile@profile: nuscenes
+
+data_loader: nuscenes
+nuscenes:
+  info_dir: ${oc.env:NUSCENES_INFOS,/data/yongkangli/UniDriveVLA/nuScenes/data/infos}
+  path_root: ${oc.env:NUSCENES_PATH_ROOT,/data/yongkangli/UniDriveVLA/nuScenes}
+  data_root: ${oc.env:NUSCENES_ROOT,/data/yongkangli/UniDriveVLA/nuScenes/data/nuscenes}
+  version: ${oc.env:NUSCENES_VERSION,v1.0-trainval}
+  # the official recipe supervises occupancy: Occ3D gts/{scene}/{token}/labels.npz and its OccWorld VAE
+  # (occvae_latest.pth, agent.vae_path). Both are required; nuscenes.occ_root=null agent.vae_path=null trains without
+  occ_root: ${oc.env:NUSCENES_OCC_ROOT}
+
+agent:
+  vae_path: ${oc.env:OCCWORLD_VAE_PATH}
+
+train:                   # the official stage-1 recipe (the optimizer's is the agent's default)
+  max_epochs: 30
+  # its EMAHook never swaps the average in (it hooks train epochs, the IterBasedRunner calls neither): results and
+  # checkpoints are the trained weights
+  ema_decay: 0.0
+stage2_max_epochs: 15
+augment:
+  geometry: {flip_p: 0.5, rotate_deg: 5.4}   # its ResizeCropFlipImage (rand_flip, rot_lim)
+  photometric: true                           # its PhotoMetricDistortionMultiViewImage
+
+evaluator:
+  name: nuscenes
+  every_n_epochs: 1
+  on_end: true

@@ -1,0 +1,7 @@
+profile: nuscenes
+checkpoint: null
+with_motion: null               # infer new checkpoint architecture; use true for legacy stage-2 checkpoints
+checkpoint_frame: null           # required for legacy nuScenes / Bench2Drive checkpoints without frame metadata
+device: cuda
+host: 0.0.0.0
+port: 9000

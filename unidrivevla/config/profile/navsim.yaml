@@ -1,0 +1,24 @@
+# NAVSIM (OpenScene / nuPlan), rear-axle ego frame. delta_mean / delta_std: run tools/data_stats.py on the cache.
+name: navsim
+frame: ego
+prompt_style: ego              # already the rear-axle frame; the nuScenes / Bench2Drive prompts describe LiDAR axes
+cameras: [front, front_left, left, back_left, front_right, right, back_right, back]
+view_tokens: ["<FRONT_VIEW>", "<FRONT_LEFT_VIEW>", "<LEFT_VIEW>", "<BACK_LEFT_VIEW>",
+              "<FRONT_RIGHT_VIEW>", "<RIGHT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>"]
+horizon: 8
+motion_steps: 10          # navtrain scenes hold 10 future frames
+commands: [right, left, straight, unknown]
+command_prompts: ["TURN RIGHT ", "TURN LEFT  ", "GO STRAIGHT", "UNKNOWN    "]
+status_layout: [vel_x, vel_y, acc_x, acc_y]
+det_classes: [vehicle, bicycle, pedestrian, traffic_cone, barrier, czone_sign, generic_object]
+box_range: [-51.2, -51.2, 51.2, 51.2]
+reverse_classes: [barrier]
+yawless_classes: [traffic_cone]
+map_classes: [ped_crossing, divider, boundary]
+map_roi: [60.0, 30.0]
+ground_height: 0.0
+ego_box: [1.461, 0.0, 0.889, 5.176, 2.297, 1.777, 0.0]   # Chrysler Pacifica about the rear axle
+anchors_dir: ${oc.env:UNIDRIVE_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors}/navsim
+delta_mean: [2.2707, 0.0]
+delta_std: [1.8668, 0.3427]
+prefix_max_len: 0              # pad the prompt to the batch's longest only (null: the official fixed length)

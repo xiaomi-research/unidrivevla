@@ -1,0 +1,8 @@
+__pycache__/
+.codex-tasks/
+*.py[cod]
+unidrivevla/*.egg-info/
+unidrivevla/build/
+unidrivevla/dist/
+unidrivevla/models/ops/build/
+unidrivevla/models/ops/*.so

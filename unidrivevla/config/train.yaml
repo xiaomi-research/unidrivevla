@@ -1,0 +1,60 @@
+# torchrun train.py data=navsim|nuscenes|b2d [overrides]
+hydra:
+  run:
+    dir: ${output_dir}
+  output_subdir: code/hydra/${oc.env:UNIDRIVE_INVOCATION_ID,manual}
+  searchpath:                           # NAVSIM's configs, for data=navsim
+    - pkg://navsim.planning.script.config.common
+    - pkg://navsim.planning.script.config.training
+  job:
+    chdir: false
+
+defaults:
+  - agent: unidrivevla
+  - data: navsim
+  - stage: stage1                       # stage=stage2: the official second stage (config/stage/stage2.yaml)
+  - vqa: disabled                       # combined matches main's AR hook; alternate is an explicit schedule ablation
+  - _self_
+
+# A new default directory per invocation; pass experiment_name=<existing-run> to resume.
+experiment_name: unidrivevla_${data_loader}_${oc.env:UNIDRIVE_RUN_MODE,train}_${oc.env:UNIDRIVE_RUN_ID,manual}
+output_dir: ${oc.env:UNIDRIVE_EXP_ROOT,/data/yongkangli/UniDriveVLA/exp}/${experiment_name}
+seed: 0
+
+train:
+  strategy: ddp
+  precision: ${oc.select:agent.profile.train_precision,native}  # saved legacy metadata retains native module dtypes
+  replicate_frozen: [head.qwen3_vl_with_expert.qwen3_vl]
+  fsdp_wrap_modules: [Qwen3VLTextDecoderLayer]
+  compile: false
+  ddp_find_unused_parameters: true
+  ddp_reduce_dtype: ${oc.select:agent.profile.ddp_reduce_dtype,auto}  # DDP only; native profiles match main BF16 communication
+  ddp_cast_frozen_parameters: ${oc.select:agent.profile.ddp_cast_frozen_parameters,false}
+  grad_clip: 1.0                       # main's default DeepSpeed JSON; its MMCV clipping hook is bypassed
+  # the official recipes' batch (8 GPUs x 4 x 4 accumulation steps), which their lr and warmup are tuned for:
+  # grad_accum = global_batch / (batch_size x GPUs). 0 uses grad_accum
+  global_batch: 128
+  grad_accum: 1
+  max_steps: 0                          # > 0 stops early (smoke runs)
+  skip_validation: false
+  log_every: 10
+  save_every_n_steps: 0                 # optimizer-step interval; exact recovery also saves at epoch boundaries
+  resume: false                         # existing output requires a complete checkpoint; resume keeps old Hydra provenance
+  exact_resume: false                   # deterministic recovery; requires planning/VQA num_workers=0 and same config/world
+  top_k: 3
+
+dataloader:
+  eval_batch_size: 1                    # main evaluates one frame per temporal slot, independently of train batch
+  # sources with frame order (nuScenes, Bench2Drive) feed each batch slot consecutive frames of a sequence cut into
+  # this many parts, as the official GroupInBatchSampler; 0 shuffles frames
+  sequence_split: 2
+  params:
+    batch_size: 4                       # official micro-batch; override to 1 for a 24 GB smoke run
+    num_workers: 4
+    pin_memory: true
+    prefetch_factor: 2
+
+plugins: []                             # augment: per dataset, in data/*.yaml
+monitor:
+  wandb: disabled
+  project: unidrivevla

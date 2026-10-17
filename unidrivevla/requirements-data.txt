@@ -1,0 +1,28 @@
+# Data-conversion env, separate from training. The env used to build infos was
+# Python 3.9.25, mmcv 1.7.2, CPU torch. Converters call mmcv.dump / NuScenes / opencv;
+# they do not need mmcv's CUDA ops (MMCV_WITH_OPS=0).
+#
+#   pip install torch==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-data.txt
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.5.1+cpu
+mmcv==1.7.2
+nuscenes-devkit==1.1.10
+numpy==1.23.4
+opencv-python==4.11.0.86
+pillow==11.3.0
+pyquaternion==0.9.9
+Shapely==1.8.5
+scipy==1.13.1
+PyYAML==6.0.3
+omegaconf==2.3.1  # Profile/config parsing in the official dataset parity checks
+tqdm==4.70.1
+
+# tools/data_converter/vad_nuscenes_converter.py also imports mmdet3d
+# (mmdet3d.datasets.NuScenesDataset, mmdet3d.core.bbox.box_np_ops.points_cam2img).
+# That package is not installed in this env. The trainer reads
+# nuscenes_infos_{train,val}.pkl from nuscenes_converter.py and does not load the
+# temporal pkl. Official UniDriveVLA builds mmdetection3d 1.0.0rc6 for its own
+# training stack; the training env here has mmdet==2.26.0 and no mmdet3d.

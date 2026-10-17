@@ -1,0 +1,2 @@
+# @package _global_
+# the official stage 1 is the defaults: det + map + ego (no motion), the VLM trained (vision tower and LoRA)

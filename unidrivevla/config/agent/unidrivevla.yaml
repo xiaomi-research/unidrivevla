@@ -1,0 +1,33 @@
+_target_: unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy
+_convert_: all
+profile: ${profile}
+vlm_path: ${oc.env:VLM_PRETRAINED_PATH,/data/yongkangli/ckpts/Qwen3-VL-2B-Instruct}
+vae_path: ${oc.env:OCCWORLD_VAE_PATH,null}
+# the official stage-1 recipe (nuScenes; data/b2d.yaml sets Bench2Drive's): AdamW and mmcv's cosine over all
+# iterations down to lr * min_lr_ratio. Native nuScenes/B2D profiles update before each micro-batch; warmup_steps
+# stays expressed in optimizer steps, so Trainer expands it by the actual grad_accum. Legacy profiles keep step timing.
+lr: 2.0e-4
+weight_decay: 1.0e-7
+warmup_steps: 125
+warmup_start: 0.3333333333333333
+min_lr_ratio: 1.0e-3
+vlm_lr_mult: 0.5          # the VLM's trainable parameters (vision tower, LoRA) run at lr * vlm_lr_mult
+# The official stage 1 trains the VLM: train_vlm unfreezes the vision tower and the language model's LoRA adapters
+# (the rest of the language model stays frozen). Stage 2 keeps the adapters, frozen with the rest of the VLM, so the
+# stage-1 ones load. train_vlm: false freezes the VLM; only the experts, the perception decoder and the heads train.
+train_vlm: true
+lora: {r: 64, lora_alpha: 128, lora_dropout: 0.0, bias: none,
+       target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+with_motion: false
+checkpoint_path: null
+checkpoint_frame: null  # legacy weights without metadata require explicit ego/lidar provenance for native heads
+# training attention over the joint VLM / expert sequence: flex's backward needs more shared memory per SM than an
+# RTX 3090 (sm86) has at head_dim 128 (torch 2.6 finds no kernel); flex on A100 / H100
+attn_implementation: sdpa
+# recompute the VLM and expert layers in backward, as the official head always does (the numbers do not change).
+# Training the VLM needs it; measure its speed/memory tradeoff with the frozen VLM on the target hardware.
+gradient_checkpointing: true
+# the frozen VLM prefix once without autograd, as the KV cache the experts attend to (inference's structure, the flex
+# mask's attention): backward covers the expert tokens only. tools/check_frozen_prefix.py compares it with the joint
+# pass. A trained VLM (train_vlm) needs the joint pass and turns it off.
+cache_frozen_prefix: true

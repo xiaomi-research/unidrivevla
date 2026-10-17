@@ -1,0 +1,25 @@
+# Planning labels from PhysicalAI egomotion; cameras are rectified offline to explicit per-camera pinhole K.
+name: physicalai
+frame: ego
+prompt_style: ego
+cameras: [front, front_tele, front_left, front_right, back_left, back_right, back]
+view_tokens: ["<FRONT_VIEW>", "<FRONT_TELE_VIEW>", "<FRONT_LEFT_VIEW>", "<FRONT_RIGHT_VIEW>", "<BACK_LEFT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>"]
+image_hw: [544, 960]
+horizon: 6
+motion_steps: 6
+commands: [unknown]
+command_prompts: ["UNKNOWN"]
+status_layout: [vel_x, vel_y, acc_x, acc_y]
+# Other target families are explicitly unsupervised by this source; these vocabularies only size inactive heads.
+det_classes: [vehicle, bicycle, pedestrian, traffic_cone, barrier, generic_object]
+map_classes: [ped_crossing, divider, boundary]
+box_range: [-60.0, -60.0, 60.0, 60.0]
+map_roi: [60.0, 30.0]
+ego_box: [1.5, 0.0, 0.75, 4.7, 1.9, 1.5, 0.0]  # generic planning-query prior; collision/geometry labels are unavailable
+anchors_dir: ${oc.env:UNIDRIVE_EXTERNAL_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors/nuscenes}  # transfer structural anchors; override for a calibrated source-specific set
+delta_mean: [0.0, 0.0]    # fit tools/data_stats.py on the actual cache before production training
+delta_std: [1.0, 1.0]
+ground_height: 0.0
+train_resize: null
+use_occ_tokens: false
+prefix_max_len: 0
