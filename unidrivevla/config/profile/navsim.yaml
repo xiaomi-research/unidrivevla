@@ -21,4 +21,6 @@ ego_box: [1.461, 0.0, 0.889, 5.176, 2.297, 1.777, 0.0]   # Chrysler Pacifica abo
 anchors_dir: ${oc.env:UNIDRIVE_ANCHORS_ROOT,/data/yongkangli/UniDriveVLA/anchors}/navsim
 delta_mean: [2.2707, 0.0]
 delta_std: [1.8668, 0.3427]
+occ_classes: 9                 # free + background + 7 detection classes, matching occvae_navsim.pth
+occ_format: occ3d
 prefix_max_len: 0              # pad the prompt to the batch's longest only (null: the official fixed length)

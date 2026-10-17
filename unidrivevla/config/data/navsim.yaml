@@ -12,6 +12,12 @@ cache_path: ${oc.env:NAVSIM_EXP_ROOT,/data/yongkangli/NAVSIM/exp}/unidrivevla_sa
 use_cache_without_dataset: true
 force_cache_computation: false
 
+# Occupancy labels for NAVSIM. The existing sample cache does not include occ;
+# set occ_root to a directory of token-named .npz files with dense (200,200,16)
+# 'semantics' arrays in the VAE's 9-class format. Occ labels are matched by token.
+occ_root: null
+occ_format: occ3d
+
 train:                   # no official NAVSIM recipe: the stage-1 one of the agent's defaults (stage 2 needs
   max_epochs: 10         # stage2_max_epochs set)
   ema_decay: 0.0
