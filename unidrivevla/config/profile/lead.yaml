@@ -5,8 +5,9 @@ prompt_style: ego
 cameras: [front, front_left, front_right, back_right, back, back_left]
 view_tokens: ["<FRONT_VIEW>", "<FRONT_LEFT_VIEW>", "<FRONT_RIGHT_VIEW>", "<BACK_RIGHT_VIEW>", "<BACK_VIEW>", "<BACK_LEFT_VIEW>"]
 image_hw: [544, 544]
-horizon: 6
-motion_steps: 6
+horizon: 8                 # PR 10 lead_plan_horizon, 4 Hz over 2.0 s
+pose_interval: 0.25
+motion_steps: 8
 commands: [unknown]
 command_prompts: ["UNKNOWN"]
 status_layout: [vel_x, vel_y, acc_x, acc_y]

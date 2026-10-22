@@ -12,10 +12,14 @@ lead:
   test_split: test
 
 train:
-  max_epochs: 10
+  max_epochs: 3          # PR 10 LEAD stage 1
+  global_batch: 512      # 16 GPU x 16 x accum 2, or 32 GPU x 16 x accum 1
   ema_decay: 0.0
-stage2_max_epochs: 0
+stage2_max_epochs: 9
 augment: null
+dataloader:
+  params:
+    batch_size: 16
 
 # UniDriveVLA computes planning L2 on validation targets; LEAD closed-loop CARLA scoring remains separate.
 evaluator:

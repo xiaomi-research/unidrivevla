@@ -112,7 +112,7 @@ def canonical_input(request):
         view = CAMERA_VIEWS[name]
         cameras[view] = {"image": decoded[name], **camera_calibration[view]}
 
-    # The nuScenes profile reads acceleration and rotation rate. NeuroNCAP's public API does not provide steering.
+    # NeuroNCAP's public API does not provide steering; that component stays NaN and becomes 0.
     return {
         "cameras": cameras,
         "ego2global": pose,

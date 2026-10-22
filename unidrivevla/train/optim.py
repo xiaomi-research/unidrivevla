@@ -36,7 +36,9 @@ class MasterAdamW(torch.optim.AdamW):
         for group in self.param_groups:
             # state for parameters without a gradient too: a resume initializes every parameter's state (DCP's
             # _init_optim_state) and then needs each of its keys in the checkpoint
-            for p in group["params"]:
+            # Largest first: on a nearly full 24 GB card the caching allocator otherwise
+            # fragments, and a later 20 MB state tensor fails with space still reserved.
+            for p in sorted(group["params"], key=lambda q: q.numel(), reverse=True):
                 state = self.state[p]
                 if "step" not in state:
                     state["step"] = torch.zeros((), dtype=torch.float32, device=p.device)  # the fused kernel's layout

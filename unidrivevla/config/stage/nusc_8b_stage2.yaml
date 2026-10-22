@@ -1,0 +1,17 @@
+# @package _global_
+# PR 10: unidrivevla_nusc_8b_stage2.py. 16 GPU x batch 2 x accum 4 = 128.
+# Visual WASP beta 0.005, rank 128; LLM WASP beta 0.003, 252 layers.
+defaults:
+  - nusc_2b_stage2
+agent:
+  vlm_variant: 8b
+  visual_lora: {type: lora, r: 128, lora_alpha: 256, lora_dropout: 0.0, bias: none,
+                target_modules: '^(merger|deepstack_merger_list\.\d+)\.linear_fc[12]$'}
+  visual_wasp: {type: wasp, rank: 128, alpha: 256, top_k: 16, beta: 0.005, dropout: 0.0, eps: 1.0e-6,
+                expected_num_layers: 108, target_modules: [qkv, proj, linear_fc1, linear_fc2]}
+  llm_wasp: {type: wasp, rank: 128, alpha: 256, top_k: 16, beta: 0.003, dropout: 0.0, eps: 1.0e-6,
+             expected_num_layers: 252,
+             target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+dataloader:
+  params:
+    batch_size: 2

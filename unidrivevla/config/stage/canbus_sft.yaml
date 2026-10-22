@@ -1,0 +1,28 @@
+# @package _global_
+# PR 10 pretrain_script: 3 epoch full-parameter can-bus SFT.
+# 8 GPU x batch 1 x accum 16 = 128. lr 4e-5. No LoRA and no WASP.
+# EGO_CANBUS_TRAIN_JSONL is the QA jsonl; its checkpoint is VLM_PRETRAINED_PATH for the ego stage-2 recipes.
+agent:
+  train_vlm: true
+  with_motion: false
+  lora: null
+  llm_wasp: null
+  visual_lora: null
+  visual_wasp: null
+  lr: 4.0e-5
+  vlm_lr_mult: 1.0
+  canbus_sft_prompt: false
+  coc_language_prompt: false
+  coc_planning_loss_weight: 0.0
+train:
+  max_epochs: 3
+  global_batch: 128
+  grad_clip: 0.0
+dataloader:
+  params:
+    batch_size: 1
+vqa:
+  enabled: true
+  mode: combined
+  max_pixels: 522240
+  jsonl_paths: ['${oc.env:EGO_CANBUS_TRAIN_JSONL}']

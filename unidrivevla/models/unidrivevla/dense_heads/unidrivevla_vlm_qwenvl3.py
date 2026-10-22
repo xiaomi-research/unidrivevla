@@ -26,6 +26,16 @@ from safetensors.torch import load_file
 from transformers.models.qwen3_vl import Qwen3VLForConditionalGeneration, Qwen3VLTextModel
 from transformers.models.qwen3_vl import modeling_qwen3_vl
 from transformers.models.auto import CONFIG_MAPPING
+
+def _pr10_rmsnorm(self, hidden_states):
+    # PR10 multiplies the fp32 norm by the weight, then casts. Stock transformers casts first.
+    input_dtype = hidden_states.dtype
+    hidden_states = hidden_states.to(torch.float32)
+    variance = hidden_states.pow(2).mean(-1, keepdim=True)
+    hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+    return (self.weight * hidden_states).to(input_dtype)
+
+modeling_qwen3_vl.Qwen3VLTextRMSNorm.forward = _pr10_rmsnorm
 from transformers import AutoConfig, AutoProcessor
 
 from qwen_vl_utils import smart_resize
@@ -274,6 +284,10 @@ class Qwen3VLWithExpertModel(nn.Module):
         precision: Literal["bfloat16", "float32"] = "bfloat16",
         train_vlm: bool = False,
         lora_cfg: Optional[Dict[str, Any]] = None,
+        peft_cfg: Optional[Dict[str, Any]] = None,
+        visual_lora_cfg: Optional[Dict[str, Any]] = None,
+        visual_wasp_cfg: Optional[Dict[str, Any]] = None,
+        visual_projector_wasp_cfg: Optional[Dict[str, Any]] = None,
         view_tokens: Optional[List[str]] = None,
         processor_use_fast: Optional[bool] = None,
     ):
@@ -380,25 +394,118 @@ class Qwen3VLWithExpertModel(nn.Module):
 
         self.qwen3_action_expert.embed_tokens = None
 
+        if lora_cfg is not None and peft_cfg is not None:
+            raise ValueError("Use only one of lora_cfg or peft_cfg, not both.")
         self._lora_enabled = False
+        self._language_lora_enabled = False
+        self._language_wasp_enabled = False
+        self._visual_lora_enabled = False
+        self._visual_wasp_enabled = False
+        self._visual_projector_wasp_enabled = False
+        self._language_adapter_param_ids = set()
+        self._visual_lora_param_ids = set()
+        self._visual_wasp_param_ids = set()
+        self._visual_projector_wasp_param_ids = set()
+        active_language_peft_cfg = peft_cfg
         if lora_cfg is not None:
+            active_language_peft_cfg = dict(lora_cfg)
+            active_language_peft_cfg.setdefault("type", "lora")
+        if active_language_peft_cfg is not None:
+            language_peft_options = dict(active_language_peft_cfg)
+            language_peft_type = str(language_peft_options.pop("type", "lora")).lower()
+            if language_peft_type == "lora":
+                try:
+                    from peft import LoraConfig, get_peft_model
+                except ImportError as exc:
+                    raise ImportError("peft is required for LoRA training. Install it with: pip install peft") from exc
+                self.qwen3_vl.model.language_model = get_peft_model(
+                    self.qwen3_vl.model.language_model, LoraConfig(**language_peft_options))
+                self.qwen3_vl.model.language_model.print_trainable_parameters()
+                self._language_lora_enabled = True
+            elif language_peft_type == "wasp":
+                from .wasp import apply_wasp
+                replaced = apply_wasp(self.qwen3_vl.model.language_model, language_peft_options)
+                expected_layers = language_peft_options.get("expected_num_layers")
+                if expected_layers is not None and replaced != int(expected_layers):
+                    raise RuntimeError(f"Language WASP target count mismatch: expected {expected_layers}, replaced {replaced}.")
+                self._language_wasp_enabled = True
+            else:
+                raise ValueError(f"peft_cfg only supports type='lora' or type='wasp', got {language_peft_type!r}.")
+            self._lora_enabled = True
+            self._language_adapter_param_ids = {id(param) for param in self.qwen3_vl.model.language_model.parameters() if param.requires_grad}
+            if not self._language_adapter_param_ids:
+                raise RuntimeError("Language PEFT created no trainable parameters; check target_modules.")
+        if visual_lora_cfg is not None:
+            visual_lora_options = dict(visual_lora_cfg)
+            if str(visual_lora_options.pop("type", "lora")).lower() != "lora":
+                raise ValueError("visual_lora_cfg only supports type='lora'")
             try:
                 from peft import LoraConfig, get_peft_model
-            except ImportError:
-                raise ImportError(
-                    "peft is required for LoRA training. "
-                    "Install it with: pip install peft"
-                )
-            lora_config = LoraConfig(**lora_cfg)
-            self.qwen3_vl.model.language_model = get_peft_model(
-                self.qwen3_vl.model.language_model, lora_config
-            )
-            self.qwen3_vl.model.language_model.print_trainable_parameters()
+            except ImportError as exc:
+                raise ImportError("peft is required for visual LoRA training. Install it with: pip install peft") from exc
+            visual = getattr(self.qwen3_vl.model, "visual", None)
+            if visual is None:
+                raise AttributeError("Qwen3-VL model has no visual module for visual LoRA.")
+            self.qwen3_vl.model.visual = get_peft_model(visual, LoraConfig(**visual_lora_options))
+            self._visual_lora_param_ids = {id(param) for param in self.qwen3_vl.model.visual.parameters() if param.requires_grad}
+            if not self._visual_lora_param_ids:
+                raise RuntimeError("visual_lora_cfg created no trainable parameters; check target_modules.")
             self._lora_enabled = True
+            self._visual_lora_enabled = True
+        if visual_wasp_cfg is not None:
+            visual_wasp_options = dict(visual_wasp_cfg)
+            if str(visual_wasp_options.pop("type", "wasp")).lower() != "wasp":
+                raise ValueError("visual_wasp_cfg only supports type='wasp'")
+            visual_core = _unwrap_lm(self.qwen3_vl.model.visual)
+            visual_blocks = getattr(visual_core, "blocks", None)
+            if visual_blocks is None:
+                raise AttributeError("Qwen3-VL visual module has no encoder blocks for WASP.")
+            from .wasp import apply_wasp
+            replaced = apply_wasp(visual_blocks, visual_wasp_options)
+            expected_layers = visual_wasp_options.get("expected_num_layers")
+            if expected_layers is not None and replaced != int(expected_layers):
+                raise RuntimeError(f"Visual WASP target count mismatch: expected {expected_layers}, replaced {replaced}.")
+            self._visual_wasp_param_ids = {id(param) for param in visual_blocks.parameters() if param.requires_grad}
+            self._lora_enabled = True
+            self._visual_wasp_enabled = True
+        if visual_projector_wasp_cfg is not None:
+            projector_wasp_options = dict(visual_projector_wasp_cfg)
+            if str(projector_wasp_options.pop("type", "wasp")).lower() != "wasp":
+                raise ValueError("visual_projector_wasp_cfg only supports type='wasp'")
+            visual_core = _unwrap_lm(self.qwen3_vl.model.visual)
+            projector_modules = []
+            merger = getattr(visual_core, "merger", None)
+            if merger is not None:
+                projector_modules.append(merger)
+            deepstack = getattr(visual_core, "deepstack_merger_list", None)
+            if deepstack is not None:
+                projector_modules.append(deepstack)
+            from .wasp import apply_wasp
+            replaced = sum(apply_wasp(module, projector_wasp_options) for module in projector_modules)
+            expected_layers = projector_wasp_options.get("expected_num_layers")
+            if expected_layers is not None and replaced != int(expected_layers):
+                raise RuntimeError(f"Visual projector WASP target count mismatch: expected {expected_layers}, replaced {replaced}.")
+            self._visual_projector_wasp_enabled = True
+            self._lora_enabled = True
+        self._use_mixed_visual_peft = visual_lora_cfg is not None or visual_wasp_cfg is not None or visual_projector_wasp_cfg is not None
 
-        if not train_vlm:
-            for p in self.qwen3_vl.parameters():
-                p.requires_grad = False
+        def apply_trainability_policy():
+            if not train_vlm:
+                self.qwen3_vl.requires_grad_(False)
+                return
+            if not self._use_mixed_visual_peft and peft_cfg is None:
+                return
+            self.qwen3_vl.requires_grad_(False)
+            for param in self.qwen3_vl.model.language_model.parameters():
+                if id(param) in self._language_adapter_param_ids:
+                    param.requires_grad_(True)
+            visual_adapter_ids = self._visual_lora_param_ids | self._visual_wasp_param_ids | self._visual_projector_wasp_param_ids
+            for param in self.qwen3_vl.model.visual.parameters():
+                if id(param) in visual_adapter_ids:
+                    param.requires_grad_(True)
+
+        self._apply_trainability_policy = apply_trainability_policy
+        apply_trainability_policy()
 
         _vlm_config = self.qwen3_vl.config
         assert _vlm_config.text_config.num_hidden_layers == self.qwen3_perception_expert.config.num_hidden_layers == self.qwen3_action_expert.config.num_hidden_layers
@@ -415,6 +522,7 @@ class Qwen3VLWithExpertModel(nn.Module):
         if len(tokens_to_add) > 0:
             tokenizer.add_tokens(tokens_to_add)
             self.qwen3_vl.resize_token_embeddings(len(tokenizer))
+        self._apply_trainability_policy()
 
         if hasattr(self.qwen3_action_expert, "_init_weights"):
             self.qwen3_action_expert.apply(self.qwen3_action_expert._init_weights)
@@ -425,6 +533,14 @@ class Qwen3VLWithExpertModel(nn.Module):
 
 
 
+    def visual_wasp_regularization(self):
+        if not self._visual_wasp_enabled:
+            return None
+        from .wasp import compute_wasp_regularization
+        visual_core = _unwrap_lm(self.qwen3_vl.model.visual)
+        blocks = getattr(visual_core, "blocks", None)
+        return None if blocks is None else compute_wasp_regularization(blocks)
+
     @property
     def vlm_base(self):
         return self.qwen3_vl
@@ -432,9 +548,16 @@ class Qwen3VLWithExpertModel(nn.Module):
     def merge_lora(self) -> None:
         if not self._lora_enabled:
             return
-
-        merged_lm = self.qwen3_vl.model.language_model.merge_and_unload()
-        self.qwen3_vl.model.language_model = merged_lm
+        if self._language_lora_enabled:
+            self.qwen3_vl.model.language_model = self.qwen3_vl.model.language_model.merge_and_unload()
+        elif self._language_wasp_enabled:
+            from .wasp import merge_wasp
+            merge_wasp(self.qwen3_vl.model.language_model)
+        if self._visual_lora_enabled:
+            self.qwen3_vl.model.visual = self.qwen3_vl.model.visual.merge_and_unload()
+        if self._visual_wasp_enabled or self._visual_projector_wasp_enabled:
+            from .wasp import merge_wasp
+            merge_wasp(self.qwen3_vl.model.visual)
         self._lora_enabled = False
 
     def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):

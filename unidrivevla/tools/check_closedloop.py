@@ -136,7 +136,7 @@ def _check_neuro_ncap(profile):
     projection[:3, :3] = request["calibration"]["camera2image"][name]
     assert np.allclose(policy.last["projection_mat"][0, profile.cameras.index(view)], projection @ np.linalg.inv(sensor2ego), atol=1e-5)
     assert policy.last["img"][0, profile.cameras.index(view), :, 0, 0].tolist() == [37, 23, 11]
-    assert policy.last["ego_status"].shape == (1, 6)
+    assert policy.last["ego_status"].shape == (1, 10)
     assert np.allclose(policy.last["hist_traj"][0, -1].numpy(), [0, 0])
 
     request["timestamp"] += 500_000

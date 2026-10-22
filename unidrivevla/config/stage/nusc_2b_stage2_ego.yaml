@@ -1,0 +1,6 @@
+# @package _global_
+# PR 10: unidrivevla_nusc_2b_stage2_with_ego.py. Same WASP as 2B stage 2, plus the can-bus SFT prompt.
+defaults:
+  - nusc_2b_stage2
+agent:
+  canbus_sft_prompt: true

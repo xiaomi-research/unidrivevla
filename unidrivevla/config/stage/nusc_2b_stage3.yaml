@@ -1,0 +1,11 @@
+# @package _global_
+# PR 10: unidrivevla_nusc_2b_stage3.py. Motion on, lr 1e-4, 15 epochs, WASP weights unchanged.
+# STAGE1_CHECKPOINT is the stage-2 epoch-20 checkpoint (the release keeps that env name).
+defaults:
+  - nusc_2b_stage2
+agent:
+  with_motion: true
+  lr: 1.0e-4
+  checkpoint_path: '${oc.env:STAGE1_CHECKPOINT}'
+train:
+  max_epochs: 15

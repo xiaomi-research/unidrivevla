@@ -1,0 +1,16 @@
+# @package _global_
+# PR 10: unidrivevla_nusc_8b_stage3.py. Motion on, lr 1e-4, 15 epochs, WASP regularizer weight 0.
+defaults:
+  - nusc_8b_stage2
+agent:
+  with_motion: true
+  lr: 1.0e-4
+  checkpoint_path: '${oc.env:STAGE1_CHECKPOINT}'
+  visual_wasp: {type: wasp, rank: 128, alpha: 256, top_k: 16, beta: 0.0, wasp_loss_weight: 0.0,
+                dropout: 0.0, eps: 1.0e-6, expected_num_layers: 108,
+                target_modules: [qkv, proj, linear_fc1, linear_fc2]}
+  llm_wasp: {type: wasp, rank: 128, alpha: 256, top_k: 16, beta: 0.0, wasp_loss_weight: 0.0,
+             dropout: 0.0, eps: 1.0e-6, expected_num_layers: 252,
+             target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+train:
+  max_epochs: 15

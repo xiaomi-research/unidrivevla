@@ -1,0 +1,17 @@
+# @package _global_
+# PR 10: unidrivevla_nusc_8b_stage2_with_ego.py. 8 GPU x batch 2 x accum 8 = 128.
+# WASP stays rank 64 / visual beta 0.01; warmup_steps 62.5 * accum 8 = 500 micro-batches.
+defaults:
+  - nusc_2b_stage2
+agent:
+  vlm_variant: 8b
+  canbus_sft_prompt: true
+  warmup_steps: 62.5
+  visual_wasp: {type: wasp, rank: 64, alpha: 128, top_k: 16, beta: 0.01, dropout: 0.0, eps: 1.0e-6,
+                expected_num_layers: 108, target_modules: [qkv, proj, linear_fc1, linear_fc2]}
+  llm_wasp: {type: wasp, rank: 64, alpha: 128, top_k: 16, beta: 0.003, dropout: 0.0, eps: 1.0e-6,
+             expected_num_layers: 252,
+             target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+dataloader:
+  params:
+    batch_size: 2

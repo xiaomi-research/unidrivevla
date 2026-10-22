@@ -45,6 +45,7 @@ class Profile:
     delta_mean: List[float]
     delta_std: List[float]
     frame: str = "ego"
+    pose_interval: float = 0.5  # seconds between planned poses; LEAD release is 4 Hz (0.25)
     image_hw: List[int] = field(default_factory=lambda: [544, 960])
     motion_steps: int = 12
     train_precision: str = "native"  # parameter construction dtype recipe; metadata only in the profile adapter
@@ -429,7 +430,13 @@ def deformable(num_cams: int, keypoints: dict, keypoint_from_anchor: bool = Fals
 
 def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_vlm: bool, with_motion: bool,
                 attn_implementation: str = "flex", gradient_checkpointing: bool = True,
-                cache_frozen_prefix: bool = False) -> dict:
+                cache_frozen_prefix: bool = False, *, vlm_variant: str = "2b",
+                visual_lora=None, visual_wasp=None, llm_wasp=None, visual_projector_wasp=None,
+                canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
+                coc_jsonl_path: Optional[str] = None, coc_language_loss_weight: Optional[float] = None,
+                coc_planning_loss_weight: float = 0.0) -> dict:
+    if coc_planning_loss_weight:
+        raise ValueError("coc_planning_loss_weight must be 0; the release recipes add no CoC planning loss")
     embed_dims, groups, drop, num_decoder, num_single = 256, 8, 0.1, 6, 1
     single = ["concat", "gnn", "inter_gnn", "norm", "split", "deformable", "concat", "ffn", "norm", "split", "refine"]
     temporal = ["concat", "temp_gnn", "gnn", "inter_gnn", "norm", "split", "deformable", "concat", "ffn", "norm", "split", "refine"]
@@ -548,7 +555,12 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         delta_mean=tuple(profile.delta_mean), delta_std=tuple(profile.delta_std),
         coordinate_frame=profile.frame, prompt_style=profile.prompt_style,
         enable_knowledge_insulation=profile.enable_knowledge_insulation,
-        ar_loss_weight=profile.ar_loss_weight,
+        ar_loss_weight=profile.ar_loss_weight if coc_language_loss_weight is None else coc_language_loss_weight,
+        vlm_variant=vlm_variant,
+        visual_lora_cfg=visual_lora, visual_wasp_cfg=visual_wasp, peft_cfg=llm_wasp,
+        visual_projector_wasp_cfg=visual_projector_wasp,
+        canbus_sft_prompt=canbus_sft_prompt, coc_language_prompt=coc_language_prompt,
+        coc_jsonl_path=coc_jsonl_path or "",
         use_hist_traj=profile.use_hist_traj, use_occ_tokens=profile.use_occ_tokens,
         detach_plan_geometry=profile.detach_plan_geometry, summed_planning_loss=profile.summed_planning_loss,
         official_command_text=profile.official_command_text,
@@ -776,11 +788,17 @@ class UniDriveVLAPolicy(nn.Module):
                  lora: Optional[Dict] = None, with_motion: bool = False, checkpoint_path: Optional[str] = None,
                  attn_implementation: str = "flex", gradient_checkpointing: bool = True,
                  cache_frozen_prefix: bool = False, shared_runtime=None,
-                 checkpoint_frame: Optional[str] = None):
+                 checkpoint_frame: Optional[str] = None, vlm_variant: str = "2b",
+                 visual_lora: Optional[Dict] = None, visual_wasp: Optional[Dict] = None,
+                 llm_wasp: Optional[Dict] = None, visual_projector_wasp: Optional[Dict] = None,
+                 canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
+                 coc_jsonl_path: Optional[str] = None,
+                 coc_language_loss_weight: Optional[float] = None, coc_planning_loss_weight: float = 0.0):
         super().__init__()
         self.profile = profile if isinstance(profile, Profile) else Profile.from_config(profile)
-        self.trajectory_sampling = SimpleNamespace(num_poses=self.profile.horizon, interval_length=POSE_INTERVAL_S,
-                                                   time_horizon=self.profile.horizon * POSE_INTERVAL_S)
+        interval = float(self.profile.pose_interval)
+        self.trajectory_sampling = SimpleNamespace(num_poses=self.profile.horizon, interval_length=interval,
+                                                   time_horizon=self.profile.horizon * interval)
         self.lr, self.weight_decay, self.vlm_lr_mult = lr, weight_decay, vlm_lr_mult
         self.warmup_steps, self.warmup_start, self.min_lr_ratio = warmup_steps, warmup_start, min_lr_ratio
         self.checkpoint_path = checkpoint_path
@@ -789,8 +807,14 @@ class UniDriveVLAPolicy(nn.Module):
         self.checkpoint_frame = checkpoint_frame
         self.with_motion = bool(with_motion)
         head_cls = register_modules()
-        self.head = head_cls(**head_kwargs(self.profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
-                                           gradient_checkpointing, cache_frozen_prefix), lora_cfg=lora,
+        self.head = head_cls(**head_kwargs(
+            self.profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
+            gradient_checkpointing, cache_frozen_prefix, vlm_variant=vlm_variant,
+            visual_lora=visual_lora, visual_wasp=visual_wasp, llm_wasp=llm_wasp,
+            visual_projector_wasp=visual_projector_wasp, canbus_sft_prompt=canbus_sft_prompt,
+            coc_language_prompt=coc_language_prompt, coc_jsonl_path=coc_jsonl_path,
+            coc_language_loss_weight=coc_language_loss_weight,
+            coc_planning_loss_weight=coc_planning_loss_weight), lora_cfg=None if llm_wasp else lora,
                              shared_runtime=shared_runtime)
 
     def worker_transform(self, image_augment=None, train: bool = False):
@@ -934,6 +958,8 @@ class UniDriveVLAPolicy(nn.Module):
             batch[key] = [data[i][mask[i]] for i in range(data.shape[0])]
         batch.pop("box_mask")
         batch.pop("map_mask")
+        if tokens is not None:
+            batch["sample_tokens"] = list(tokens)
         losses = {k: v for k, v in self.head.forward_train(**batch)["losses"].items() if torch.is_tensor(v)}
         total = sum(torch.nan_to_num(v) for v in losses.values())
         return SimpleNamespace(loss=total, **{k: v.detach() for k, v in losses.items() if v.numel() == 1})

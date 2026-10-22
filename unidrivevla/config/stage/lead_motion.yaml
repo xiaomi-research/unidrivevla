@@ -1,0 +1,15 @@
+# @package _global_
+# PR 10 LEAD motion stage: 9 epochs, lr 1e-4, fresh optimizer, motion head on.
+# 32 GPU x batch 16 x accum 1 = 512. STAGE1_CHECKPOINT is the 3-epoch weight init.
+agent:
+  with_motion: true
+  train_vlm: false
+  lr: 1.0e-4
+  checkpoint_path: '${oc.env:STAGE1_CHECKPOINT}'
+train:
+  max_epochs: 9
+  global_batch: 512
+  resume: false
+dataloader:
+  params:
+    batch_size: 16

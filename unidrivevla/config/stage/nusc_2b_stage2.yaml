@@ -1,0 +1,38 @@
+# @package _global_
+# PR 10 release: unidrivevla_nusc_2b_stage2.py. 8 GPU x batch 4 x accum 4 = 128.
+# warmup_steps 125 is 500 micro-batches once profile.lr_microstep multiplies by grad_accum.
+profile:
+  prefix_max_len: 3840
+  official_attention_mask: false  # PR10 stage2 is sdpa and masks padding; the flex mask ignores it
+agent:
+  train_vlm: true
+  with_motion: false
+  lr: 2.0e-4
+  weight_decay: 1.0e-7
+  warmup_steps: 125
+  warmup_start: 0.3333333333333333
+  min_lr_ratio: 1.0e-3
+  vlm_lr_mult: 0.5
+  vlm_variant: 2b
+  gradient_checkpointing: true
+  canbus_sft_prompt: false
+  coc_language_prompt: true
+  coc_language_loss_weight: 0.1
+  coc_jsonl_path: ${oc.env:COC_JSONL_PATH,}
+  coc_planning_loss_weight: 0.0
+  visual_lora: {type: lora, r: 64, lora_alpha: 128, lora_dropout: 0.0, bias: none,
+                target_modules: '^(merger|deepstack_merger_list\.\d+)\.linear_fc[12]$'}
+  visual_wasp: {type: wasp, rank: 64, alpha: 128, top_k: 16, beta: 0.01, dropout: 0.0, eps: 1.0e-6,
+                expected_num_layers: 96, target_modules: [qkv, proj, linear_fc1, linear_fc2]}
+  llm_wasp: {type: wasp, rank: 64, alpha: 128, top_k: 16, beta: 0.003, dropout: 0.0, eps: 1.0e-6,
+             expected_num_layers: 196,
+             target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+train:
+  max_epochs: 20
+  global_batch: 128
+  grad_clip: 0.0
+dataloader:
+  params:
+    batch_size: 4
+vqa:
+  enabled: false

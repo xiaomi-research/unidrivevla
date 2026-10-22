@@ -9,7 +9,7 @@ horizon: 6
 motion_steps: 12
 commands: [right, left, straight]
 command_prompts: ["TURN RIGHT ", "TURN LEFT  ", "GO STRAIGHT"]
-status_layout: [acc_x, acc_y, acc_z, rot_x, rot_y, rot_z]   # the 6 CAN bus values the official head reads
+status_layout: [acc_x, acc_y, acc_z, rot_x, rot_y, rot_z, vel_x, vel_y, vel_z, steer]
 det_classes: [car, truck, construction_vehicle, bus, trailer, barrier, motorcycle, bicycle, pedestrian, traffic_cone]
 # slack past the 55 m lidar-frame circle (applied in data/nuscenes.py): after lidar2ego's roll a kept
 # box's ego xy can sit just outside ±55, and an ego-frame radius is not the CircleObjectRangeFilter

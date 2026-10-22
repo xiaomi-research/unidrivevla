@@ -1,5 +1,6 @@
 """AR VQA data path ported from the main UniDriveVLA dataset."""
 
+import gzip
 import json
 from typing import Dict, List, Optional, Tuple
 
@@ -22,7 +23,8 @@ class ARPlanningQADataset(Dataset):
         paths = [jsonl_path] if isinstance(jsonl_path, str) else list(jsonl_path)
         self.data = []
         for path in paths:
-            with open(path, "r", encoding="utf-8") as file:
+            opener = gzip.open if str(path).endswith(".gz") else open
+            with opener(path, "rt", encoding="utf-8") as file:
                 self.data.extend(json.loads(line) for line in file if line.strip())
         if not self.data:
             raise ValueError(f"VQA JSONL contains no samples: {paths}")

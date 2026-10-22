@@ -68,6 +68,9 @@ class DrivingBatch:
     traj_answer_mask: Optional[torch.Tensor] = None
     traj_labels: Optional[torch.Tensor] = None
     prompt_lens: Optional[List[int]] = None
+    coc_answer_ids: Optional[torch.Tensor] = None
+    coc_answer_mask: Optional[torch.Tensor] = None
+    coc_labels: Optional[torch.Tensor] = None
 
 class QwenConfig:
     def __init__(self, head_dim, hidden_size, intermediate_size, num_attention_heads, num_hidden_layers, num_key_value_heads):
@@ -170,6 +173,13 @@ class QwenVL3APlanningHead(nn.Module):
         feature_fusion_cfg: Optional[dict] = None,
         vlm_grad_scale: float = 1.0,
         lora_cfg: Optional[dict] = None,
+        peft_cfg: Optional[dict] = None,
+        visual_lora_cfg: Optional[dict] = None,
+        visual_wasp_cfg: Optional[dict] = None,
+        visual_projector_wasp_cfg: Optional[dict] = None,
+        canbus_sft_prompt: bool = False,
+        coc_language_prompt: bool = False,
+        coc_jsonl_path: Optional[str] = None,
         lora_merge_save_dir: Optional[str] = None,
         driving_deepstack: bool = False,
         view_tokens: Optional[List[str]] = None,
@@ -228,6 +238,12 @@ class QwenVL3APlanningHead(nn.Module):
         self.enable_knowledge_insulation = enable_knowledge_insulation
         self._inference_attn_impl = inference_attn_impl
         self.ar_loss_weight = ar_loss_weight
+        self.canbus_sft_prompt = canbus_sft_prompt
+        self.coc_language_prompt = coc_language_prompt
+        from .canbus_prompt import load_coc_by_token
+        self.coc_by_token = load_coc_by_token(coc_jsonl_path) if coc_language_prompt and coc_jsonl_path else {}
+        self._wasp_loss_weight = float(peft_cfg.get("wasp_loss_weight", peft_cfg.get("beta", 0.01))) if peft_cfg and str(peft_cfg.get("type", "wasp")).lower() == "wasp" else 0.0
+        self._visual_wasp_loss_weight = float(visual_wasp_cfg.get("wasp_loss_weight", visual_wasp_cfg.get("beta", 0.01))) if visual_wasp_cfg else 0.0
         self.train_vlm = train_vlm
         self.enable_traj_ar = enable_traj_ar
         self.traj_ar_loss_weight = traj_ar_loss_weight
@@ -287,6 +303,10 @@ class QwenVL3APlanningHead(nn.Module):
                 precision=dtype,
                 train_vlm=train_vlm,
                 lora_cfg=lora_cfg,
+                peft_cfg=peft_cfg,
+                visual_lora_cfg=visual_lora_cfg,
+                visual_wasp_cfg=visual_wasp_cfg,
+                visual_projector_wasp_cfg=visual_projector_wasp_cfg,
                 view_tokens=self.view_token_str_list,
                 processor_use_fast=processor_use_fast,
             )
@@ -952,6 +972,7 @@ class QwenVL3APlanningHead(nn.Module):
         ego_status=None,
         hist_traj=None,
         gt_trajs=None,
+        sample_tokens=None,
     ) -> DrivingBatch:
         device = img.device if img is not None else torch.device("cuda")
         b = int(img.shape[0]) if torch.is_tensor(img) else 1
@@ -1006,13 +1027,26 @@ class QwenVL3APlanningHead(nn.Module):
         if self.prompt_style == "b2d":
             status_np = ego_status.detach().float().cpu().numpy() if ego_status is not None else torch.zeros(b, 3).numpy()
 
+        from .canbus_prompt import build_driving_user_prompt, coc_language_target
+        coc_targets = []
         for i in range(b):
+            token = None if not sample_tokens or i >= len(sample_tokens) else sample_tokens[i]
+            target = coc_language_target(self.coc_by_token.get(str(token))) if token is not None else ""
+            coc_targets.append(target)
             if self.prompt_style == "b2d":
                 user_prompt_text = self.user_prompt_template.format(
                     nav_cmd=nav_cmd_texts[i],
                     speed=float(status_np[i, 0]),
                     acc_x=float(status_np[i, 1]),
                     acc_y=float(status_np[i, 2]),
+                )
+            elif target or self.canbus_sft_prompt:
+                user_prompt_text = build_driving_user_prompt(
+                    nav_cmd=nav_cmd_texts[i], hist_traj=hist_traj_np[i],
+                    trajectory_prompt_template=self.user_prompt_template,
+                    use_coc_language_prompt=bool(target),
+                    include_ego_status_prompt=self.canbus_sft_prompt,
+                    ego_status=ego_status[i].detach().float().cpu().numpy() if ego_status is not None else None,
                 )
             else:
                 points_str = [f"({pt[0]:+07.2f}, {pt[1]:+07.2f})" for pt in hist_traj_np[i]]
@@ -1071,6 +1105,25 @@ class QwenVL3APlanningHead(nn.Module):
             traj_answer_mask = (traj_answer_ids != tokenizer.pad_token_id).long()
             traj_labels = traj_answer_ids.masked_fill(traj_answer_mask == 0, -100)
 
+        coc_answer_ids = coc_answer_mask = coc_labels = None
+        if self.coc_language_prompt and any(coc_targets):
+            rows, masks = [], []
+            for text in coc_targets:
+                ids = tokenizer.encode(text, add_special_tokens=False) + [im_end_id, nl_id] if text else []
+                rows.append(torch.tensor(ids, dtype=torch.long))
+                masks.append(torch.ones(len(ids), dtype=torch.long))
+            coc_answer_ids = pad_sequence(rows, batch_first=True, padding_value=tokenizer.pad_token_id).to(device)
+            coc_answer_mask = pad_sequence(masks, batch_first=True, padding_value=0).to(device)
+            width = 128
+            if coc_answer_ids.shape[1] < width:
+                pad = width - coc_answer_ids.shape[1]
+                coc_answer_ids = F.pad(coc_answer_ids, (0, pad), value=tokenizer.pad_token_id)
+                coc_answer_mask = F.pad(coc_answer_mask, (0, pad), value=0)
+            else:
+                coc_answer_ids = coc_answer_ids[:, :width]
+                coc_answer_mask = coc_answer_mask[:, :width]
+            coc_labels = coc_answer_ids.masked_fill(coc_answer_mask == 0, -100)
+
         return DrivingBatch(
             images=images,
             image_masks=image_masks,
@@ -1082,6 +1135,9 @@ class QwenVL3APlanningHead(nn.Module):
             traj_answer_ids=traj_answer_ids,
             traj_answer_mask=traj_answer_mask,
             traj_labels=traj_labels,
+            coc_answer_ids=coc_answer_ids,
+            coc_answer_mask=coc_answer_mask,
+            coc_labels=coc_labels,
         )
 
 
@@ -1126,15 +1182,15 @@ class QwenVL3APlanningHead(nn.Module):
         if not FIXED_PREFIX_MAX_LEN:  # 0: no fixed length, pad to the batch's longest prefix only
             FIXED_PREFIX_MAX_LEN = max(prompt_lens_list)
 
-        FIXED_TOTAL_LEN = FIXED_PREFIX_MAX_LEN + (
-            batch.traj_answer_ids.shape[1] if batch.traj_answer_ids is not None else 0
-        )
+        answer_ids = batch.traj_answer_ids if batch.traj_answer_ids is not None else batch.coc_answer_ids
+        answer_mask = batch.traj_answer_mask if batch.traj_answer_ids is not None else batch.coc_answer_mask
+        FIXED_TOTAL_LEN = FIXED_PREFIX_MAX_LEN + (answer_ids.shape[1] if answer_ids is not None else 0)
 
-        if batch.traj_answer_ids is not None:
+        if answer_ids is not None:
             full_ids_list = []
             for b_idx in range(bs):
                 p_ids = prefix_input_ids_list[b_idx]
-                a_ids = batch.traj_answer_ids[b_idx]
+                a_ids = answer_ids[b_idx]
                 if p_ids.shape[0] > FIXED_PREFIX_MAX_LEN:
                     p_ids = p_ids[:FIXED_PREFIX_MAX_LEN]
                     prompt_lens_list[b_idx] = FIXED_PREFIX_MAX_LEN
@@ -1182,10 +1238,10 @@ class QwenVL3APlanningHead(nn.Module):
         for b_idx in range(bs):
             p_len = prompt_lens_list[b_idx]
             prefix_att_marks[b_idx, :p_len] = 1
-        if batch.traj_answer_ids is not None:
+        if answer_mask is not None:
             for b_idx in range(bs):
                 p_len = prompt_lens_list[b_idx]
-                real_ans_len = batch.traj_answer_mask[b_idx].sum().item()
+                real_ans_len = int(answer_mask[b_idx].sum().item())
                 prefix_att_marks[b_idx, p_len:p_len + real_ans_len] = 1
 
         batch.prompt_lens = prompt_lens_list
@@ -1297,6 +1353,21 @@ class QwenVL3APlanningHead(nn.Module):
         # grid_sample consumes the (B, cams, C, H, W) maps; the CUDA op the packed [feats, shapes, starts]
         return feature_maps_format(feature_maps) if self.use_deformable_func else feature_maps
 
+    def _coc_language_loss(self, batch: DrivingBatch, prefix_out: torch.Tensor) -> torch.Tensor:
+        """Cross-entropy of the causal sentence, read from the same prefix the planner attends to."""
+        labels, mask = batch.coc_labels, batch.coc_answer_mask
+        valid = mask.bool().any(dim=1)
+        if not bool(valid.any()):
+            return prefix_out.sum() * 0.0
+        lm_head = self.qwen3_vl_with_expert.qwen3_vl.lm_head
+        prompt_lens = batch.prompt_lens
+        losses = []
+        for index in valid.nonzero(as_tuple=False).flatten().tolist():
+            offsets = mask[index].nonzero(as_tuple=False).flatten()
+            hidden = prefix_out[index, int(prompt_lens[index]) - 1 + offsets]
+            losses.append(F.cross_entropy(lm_head(hidden.to(lm_head.weight.dtype)), labels[index, offsets]))
+        return self.ar_loss_weight * torch.stack(losses).mean()
+
     def forward_train(
         self,
         img=None,
@@ -1319,6 +1390,7 @@ class QwenVL3APlanningHead(nn.Module):
         gt_task_valid=None,
         hist_traj=None,
         ar_batch=None,
+        sample_tokens=None,
         **kwargs,
     ):
         if gt_ego_fut_trajs is None:
@@ -1334,6 +1406,7 @@ class QwenVL3APlanningHead(nn.Module):
             ego_status=ego_status,
             hist_traj=hist_traj,
             gt_trajs=_gt_trajs_raw if self.enable_traj_ar else None,
+            sample_tokens=sample_tokens,
         )
 
         if isinstance(gt_agent_fut_trajs, list):
@@ -1629,6 +1702,9 @@ class QwenVL3APlanningHead(nn.Module):
             )
             prefix_out, perception_out, suffix_out = outputs_embeds
 
+        if batch.coc_labels is not None and prefix_out is not None and self.train_vlm:
+            stats["loss_coc_language"] = self._coc_language_loss(batch, prefix_out)
+
         loss_traj_ar = prefix_embs.sum() * 0.0
         if self.enable_traj_ar and self.train_vlm and batch.traj_labels is not None:
             lm_head = self.qwen3_vl_with_expert.qwen3_vl.lm_head
@@ -1829,6 +1905,17 @@ class QwenVL3APlanningHead(nn.Module):
 
         if self.enable_traj_ar and self.train_vlm:
             stats["loss_traj_ar"] = loss_traj_ar
+        if self._wasp_loss_weight > 0:
+            from .wasp import compute_wasp_regularization
+            language_wasp = compute_wasp_regularization(self.qwen3_vl_with_expert.qwen3_vl.model.language_model)
+            if language_wasp is None:
+                raise RuntimeError("LLM peft_cfg uses WASP but no WASPLinear layers exist.")
+            stats["loss_wasp"] = self._wasp_loss_weight * language_wasp
+        if self._visual_wasp_loss_weight > 0:
+            visual_wasp = self.qwen3_vl_with_expert.visual_wasp_regularization()
+            if visual_wasp is None:
+                raise RuntimeError("visual_wasp_cfg is enabled but no encoder WASPLinear layers exist.")
+            stats["loss_visual_wasp"] = self._visual_wasp_loss_weight * visual_wasp
 
         stats.pop('loss_perception', None)
         if self.summed_planning_loss or knowledge_insulation_loss is not None:
