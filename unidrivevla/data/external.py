@@ -14,7 +14,10 @@ import numpy as np
 
 from unidrivevla.data.sample import check_sample
 
-CACHE_SCHEMA = "unidrivevla.external.v1"
+CACHE_SCHEMA = "unidrivevla.external.v2"
+LEGACY_CACHE_SCHEMA = "unidrivevla.external.v1"
+LEGACY_SAMPLE_INTERVAL_US = 500_000
+LEGACY_TARGET_HORIZON = 6
 _SEGMENT = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -68,9 +71,17 @@ def _encode(value, arrays: Dict[str, np.ndarray], key: str):
 class ExternalCacheWriter:
     """Build one split atomically. Existing split directories are never replaced."""
 
-    def __init__(self, cache_root: str, source: str, split: str):
+    def __init__(self, cache_root: str, source: str, split: str,
+                 sample_interval_us: int = LEGACY_SAMPLE_INTERVAL_US,
+                 target_horizon: int = LEGACY_TARGET_HORIZON):
         self.root = Path(cache_root).expanduser().resolve()
         self.source, self.split = _segment(source, "source"), _segment(split, "split")
+        if isinstance(sample_interval_us, bool) or not isinstance(sample_interval_us, int) or sample_interval_us <= 0:
+            raise ValueError("sample_interval_us must be a positive integer")
+        if isinstance(target_horizon, bool) or not isinstance(target_horizon, int) or target_horizon <= 0:
+            raise ValueError("target_horizon must be a positive integer")
+        self.sample_interval_us = sample_interval_us
+        self.target_horizon = target_horizon
         self.final = self.root / "splits" / self.split
         if self.final.exists():
             raise FileExistsError(f"cache split already exists: {self.final}")
@@ -110,6 +121,9 @@ class ExternalCacheWriter:
         if not isinstance(task_valid, dict) or task_valid.get("planning", True):
             trajectory = np.asarray(targets.get("trajectory", []), dtype=np.float64).reshape(-1, 3)
             mask = np.asarray(targets.get("trajectory_mask", []), dtype=np.float64).reshape(-1)
+            if len(trajectory) != self.target_horizon:
+                raise ValueError(f"invalid {self.source} sample {token}: trajectory has {len(trajectory)} poses, "
+                                 f"cache metadata declares {self.target_horizon}")
             if not np.isfinite(mask).all():
                 raise ValueError(f"invalid {self.source} sample {token}: planning mask contains non-finite values")
             valid = mask > 0
@@ -138,7 +152,8 @@ class ExternalCacheWriter:
         self.manifest.flush()
         os.fsync(self.manifest.fileno())
         self.manifest.close()
-        metadata = {"schema": CACHE_SCHEMA, "source": self.source, "split": self.split, "samples": self.count}
+        metadata = {"schema": CACHE_SCHEMA, "source": self.source, "split": self.split, "samples": self.count,
+                    "sample_interval_us": self.sample_interval_us, "target_horizon": self.target_horizon}
         with open(self.stage / "metadata.json", "x", encoding="utf-8") as f:
             json.dump(metadata, f, sort_keys=True)
             f.write("\n")
@@ -195,9 +210,27 @@ class ExternalCacheDataset:
             raise ValueError("cache split escapes cache_root")
         with open(_inside(self.split_root, self.split_root / "metadata.json"), encoding="utf-8") as f:
             metadata = json.load(f)
-        if metadata != {"schema": CACHE_SCHEMA, "source": self.source, "split": self.split,
-                        "samples": metadata.get("samples")} or not isinstance(metadata["samples"], int):
+        if not isinstance(metadata, dict) or metadata.get("source") != self.source or metadata.get("split") != self.split:
             raise ValueError(f"invalid cache metadata in {self.split_root}")
+        if type(metadata.get("samples")) is not int or metadata["samples"] < 0:
+            raise ValueError(f"invalid cache sample count in {self.split_root}")
+        if metadata.get("schema") == LEGACY_CACHE_SCHEMA:
+            if set(metadata) != {"schema", "source", "split", "samples"}:
+                raise ValueError(f"invalid legacy cache metadata in {self.split_root}")
+            # v1 converters sampled both sources at six 0.5 s targets.
+            self.sample_interval_us = LEGACY_SAMPLE_INTERVAL_US
+            self.target_horizon = LEGACY_TARGET_HORIZON
+        elif metadata.get("schema") == CACHE_SCHEMA:
+            if set(metadata) != {"schema", "source", "split", "samples", "sample_interval_us", "target_horizon"}:
+                raise ValueError(f"invalid cache metadata fields in {self.split_root}")
+            self.sample_interval_us = metadata["sample_interval_us"]
+            self.target_horizon = metadata["target_horizon"]
+            if (type(self.sample_interval_us) is not int or self.sample_interval_us <= 0
+                    or type(self.target_horizon) is not int or self.target_horizon <= 0):
+                raise ValueError(f"invalid cache sampling metadata in {self.split_root}")
+        else:
+            raise ValueError(f"unsupported cache schema in {self.split_root}: {metadata.get('schema')!r}")
+        self.schema = metadata["schema"]
         self.rows = []
         self.by_token = {}
         with open(_inside(self.split_root, self.split_root / "manifest.jsonl"), encoding="utf-8") as f:
@@ -219,6 +252,15 @@ class ExternalCacheDataset:
 
     def __len__(self):
         return len(self.rows)
+
+    def validate_sampling(self, sample_interval_us: int, target_horizon: int) -> None:
+        """Reject stale caches rather than silently treating old labels as a new sampling grid."""
+        if self.sample_interval_us != int(sample_interval_us) or self.target_horizon != int(target_horizon):
+            raise ValueError(
+                f"{self.source} cache uses {self.target_horizon} targets at {self.sample_interval_us} us, "
+                f"but the selected profile requires {int(target_horizon)} targets at {int(sample_interval_us)} us; "
+                "reconvert this split instead of reinterpreting its labels"
+            )
 
     def __getitem__(self, index):
         row = self.rows[index]
@@ -245,10 +287,12 @@ class ExternalCacheDataset:
             targets = _decode(row["targets"], arrays)
         if "trajectory" not in targets or "trajectory_mask" not in targets:
             raise ValueError(f"planning targets missing from cache token {token!r}")
-        return {"trajectory": targets["trajectory"], "mask": targets["trajectory_mask"]}
+        return {"trajectory": targets["trajectory"], "mask": targets["trajectory_mask"],
+                "sample_interval_us": self.sample_interval_us}
 
     def sequences(self):
-        """0.5s contiguous runs grouped by the converter's stable stream id."""
+        """Contiguous runs grouped by stream id at this cache's declared sample interval."""
+        interval_s = self.sample_interval_us / 1e6
         groups = {}
         for i, row in enumerate(self.rows):
             features = row["features"]
@@ -264,7 +308,7 @@ class ExternalCacheDataset:
             run = []
             previous = None
             for stamp, index in values:
-                if previous is not None and abs((stamp - previous) - 0.5) > 1e-3:
+                if previous is not None and abs((stamp - previous) - interval_s) > 1e-3:
                     if run:
                         sequences.append(run)
                     run = []

@@ -12,6 +12,9 @@ def waypoint_metrics(samples):
     for token, prediction, info in samples:
         pred, gt = np.asarray(prediction), np.asarray(info["trajectory"])
         mask = np.asarray(info["mask"], dtype=bool)
+        interval_us = info.get("sample_interval_us")
+        if type(interval_us) is not int or interval_us <= 0:
+            raise ValueError(f"missing or invalid sample_interval_us for {token}")
         if (pred.ndim != 2 or gt.ndim != 2 or pred.shape[1] < 2 or gt.shape[1] < 2
                 or len(pred) != len(gt) or mask.shape != (len(gt),)):
             raise ValueError(f"invalid trajectory/mask shape for {token}")
@@ -26,8 +29,11 @@ def waypoint_metrics(samples):
         final.append(float(distances[np.flatnonzero(valid)[-1]]))
         valid_samples += 1
         for second, values in at_second.items():
-            index = second * 2 - 1
-            if index < length and valid[index]:
+            time_us = second * 1_000_000
+            if time_us % interval_us:
+                continue
+            index = time_us // interval_us - 1
+            if 0 <= index < length and valid[index]:
                 values.append(float(distances[index]))
     result = {"samples": len(samples), "valid_samples": valid_samples, "valid_waypoints": len(errors)}
     if errors:

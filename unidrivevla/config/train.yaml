@@ -11,10 +11,11 @@ hydra:
 
 defaults:
   - agent: unidrivevla
+  - vqa: disabled                       # combined matches main's AR hook; alternate is an explicit schedule ablation
+  # The base stays before the selected dataset and stage; explicit CLI value overrides still apply last.
+  - _self_
   - data: navsim
   - stage: stage1                       # stage=stage2: the official second stage (config/stage/stage2.yaml)
-  - vqa: disabled                       # combined matches main's AR hook; alternate is an explicit schedule ablation
-  - _self_
 
 # A new default directory per invocation; pass experiment_name=<existing-run> to resume.
 experiment_name: unidrivevla_${data_loader}_${oc.env:UNIDRIVE_RUN_MODE,train}_${oc.env:UNIDRIVE_RUN_ID,manual}

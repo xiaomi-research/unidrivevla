@@ -2,6 +2,7 @@
 
 import math
 import copy
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -15,7 +16,9 @@ if str(ROOT) not in sys.path:
 
 from unidrivevla.adapters.unidrivevla import Profile, prepare_sample  # noqa: E402
 from unidrivevla.data.external import ExternalCacheDataset, ExternalCacheWriter  # noqa: E402
-from unidrivevla.data.lead import HORIZON, exact_label_origin, lead_sample  # noqa: E402
+from unidrivevla.data.lead import (HORIZON, LEAD_CAMERA_VIEWS, TARGET_INTERVAL_TICKS,
+                                   TARGET_INTERVAL_US, exact_label_origin, lead_inference_features,
+                                   lead_sample)  # noqa: E402
 from unidrivevla.data.physicalai import CAMERA_FEATURES, ftheta_remap, physicalai_sample, physicalai_loader, rectify_ftheta  # noqa: E402
 
 
@@ -120,37 +123,63 @@ def check_lead_mapping():
     scene = SimpleNamespace(cameras=cameras, past_ego_positions=past_positions,
                              past_ego_yaws=np.zeros(31), ego_state=SimpleNamespace(imu_se3=exact_anchor),
                              driving_meta={"localized_ego_state_se3": anchor})
-    future = {step * 10: SimpleNamespace(imu_se3=FakePose([10.25, 20.5 + step * 0.5, 0], yaw))
+    future = {step * TARGET_INTERVAL_TICKS:
+              SimpleNamespace(imu_se3=FakePose([10.25, 20.5 + step * 0.25, 0], yaw))
               for step in range(1, HORIZON + 1)}
-    features, targets, assets = lead_sample(scene, future, "log-1", label_origin_pose=exact_label_origin(scene), phase=1)
+    features, targets, assets = lead_sample(scene, future, "log-1", label_origin_pose=exact_label_origin(scene))
     assert [cam["view"] for cam in features["cameras"]] == ["front_left", "front", "front_right",
                                                              "back_right", "back", "back_left"]
     assert np.allclose(features["history_trajectory"][:, 0], [-1.5, -1.0, -0.5, 0.0])
-    assert np.allclose(targets["trajectory"][:, 0], np.arange(1, 7) * 0.5)
+    assert np.allclose(targets["trajectory"][:, 0], np.arange(1, HORIZON + 1) * 0.25)
     assert np.allclose(targets["trajectory"][:, 1], 0)
     assert np.array_equal(features["ego2global"], anchor)  # model input keeps observed localization, not exact labels
     assert not np.array_equal(features["ego2global"][:3, 3], exact_anchor.array[:3])
-    assert features["stream_id"] == "lead:log-1:phase=1"
+    assert features["stream_id"] == "lead:log-1"
     assert len(assets) == 6
+    online_scene = SimpleNamespace(cameras=cameras, past_ego_positions=past_positions,
+                                   past_ego_yaws=np.zeros(31), ego_state=None,
+                                   driving_meta=scene.driving_meta)
+    online = lead_inference_features(online_scene, ego2global=anchor, timestamp_seconds=5.0)
+    assert list(online["cameras"]) == list(LEAD_CAMERA_VIEWS)
+    assert "trajectory" not in online and "targets" not in online
+    assert np.array_equal(online["history_trajectory"], features["history_trajectory"])
+    assert np.allclose(online["ego_velocity"], features["ego_velocity"], equal_nan=True)
+    for index, (view, camera_feature) in enumerate(zip(LEAD_CAMERA_VIEWS, features["cameras"])):
+        assert np.array_equal(online["cameras"][view]["image"], cameras[index].image)
+        assert np.allclose(online["cameras"][view]["intrinsic"], camera_feature["intrinsic"])
+        assert np.allclose(online["cameras"][view]["sensor2ego"], camera_feature["sensor2ego"])
+
+    # A filtered current pose shifts history into its frame without consulting the exact label pose.
+    filtered = anchor.copy()
+    filtered[:2, 3] += [0.2, -0.1]
+    filtered_yaw = yaw + 0.05
+    filtered[:2, :2] = [[math.cos(filtered_yaw), -math.sin(filtered_yaw)],
+                        [math.sin(filtered_yaw), math.cos(filtered_yaw)]]
+    filtered_online = lead_inference_features(online_scene, ego2global=filtered, timestamp_seconds=5.0)
+    expected_last_xy = filtered[:2, :2].T @ (anchor[:2, 3] - filtered[:2, 3])
+    assert np.allclose(filtered_online["history_trajectory"][-1, :2], expected_last_xy)
+    expected_last_yaw = (yaw - filtered_yaw + np.pi) % (2 * np.pi) - np.pi
+    assert np.isclose(filtered_online["history_trajectory"][-1, 2], expected_last_yaw)
+
     # Only current localized state, past localization and exact future poses enter the mapping.
     changed = dict(scene.driving_meta)
     changed["steer"] = 1e6  # the future expert action is not an input
     scene.driving_meta = changed
-    again, _, _ = lead_sample(scene, future, "log-1", label_origin_pose=exact_label_origin(scene), phase=1)
+    again, _, _ = lead_sample(scene, future, "log-1", label_origin_pose=exact_label_origin(scene))
     assert np.array_equal(features["history_trajectory"], again["history_trajectory"])
 
     missing = dict(future)
-    missing[10] = None
-    _, masked, _ = lead_sample(scene, missing, "log-1", label_origin_pose=exact_label_origin(scene), phase=1)
+    missing[TARGET_INTERVAL_TICKS] = None
+    _, masked, _ = lead_sample(scene, missing, "log-1", label_origin_pose=exact_label_origin(scene))
     assert masked["trajectory_mask"][0] == 0 and np.array_equal(masked["trajectory"][0], np.zeros(3, np.float32))
 
-    stopped = {step * 10: SimpleNamespace(imu_se3=FakePose([10.25, 20.5, 0], yaw))
+    stopped = {step * TARGET_INTERVAL_TICKS: SimpleNamespace(imu_se3=FakePose([10.25, 20.5, 0], yaw))
                for step in range(1, HORIZON + 1)}
     _, stopped_targets, _ = lead_sample(scene, stopped, "log-1", label_origin_pose=exact_label_origin(scene))
     assert np.array_equal(stopped_targets["trajectory"], np.zeros((HORIZON, 3), np.float32))
 
     invalid_future = dict(future)
-    invalid_future[10] = SimpleNamespace(imu_se3=FakePose([float("nan"), 20.5, 0], yaw))
+    invalid_future[TARGET_INTERVAL_TICKS] = SimpleNamespace(imu_se3=FakePose([float("nan"), 20.5, 0], yaw))
     _must_fail(lambda: lead_sample(scene, invalid_future, "log-1", label_origin_pose=exact_label_origin(scene)),
                "invalid py123d PoseSE3")
     old_api = SimpleNamespace()
@@ -163,7 +192,7 @@ def check_lead_mapping():
     bad_localizer["localized_ego_state_se3"][0, 3] = np.nan
     scene.driving_meta = bad_localizer
     _must_fail(lambda: lead_sample(scene, future, "log-1", label_origin_pose=exact_label_origin(scene)),
-               "localized_ego_state_se3 must be a finite 4x4 matrix")
+               "finite rigid 4x4 pose")
     return features, targets, assets
 
 
@@ -178,9 +207,11 @@ def _must_fail(fn, fragment):
 
 def check_cache_and_adapter(source, rows):
     features, targets, assets = rows
+    interval_us = TARGET_INTERVAL_US if source == "lead" else 500_000
+    horizon = len(targets["trajectory"])
     with tempfile.TemporaryDirectory() as temp:
         features2, targets2 = copy.deepcopy(features), copy.deepcopy(targets)
-        features2["timestamp"] += 0.5
+        features2["timestamp"] += interval_us / 1e6
         assets2 = {}
         digest = "second"
         for cam in features2["cameras"]:
@@ -190,20 +221,23 @@ def check_cache_and_adapter(source, rows):
                     new = old.replace(old.split("/")[-2], digest)
                     assets2[new[7:]] = assets[old[7:]]
                     cam[key] = new
-        with ExternalCacheWriter(temp, source, "train") as writer:
+        with ExternalCacheWriter(temp, source, "train", sample_interval_us=interval_us,
+                                 target_horizon=horizon) as writer:
             writer.write_sample("one", features, targets, assets)
             writer.write_sample("two", features2, targets2, assets2)
         dataset = ExternalCacheDataset(temp, source, "train")
+        dataset.validate_sampling(interval_us, horizon)
         loaded_features, loaded_targets, token = dataset[0]
         assert token == "one"
         assert loaded_targets["task_valid"]["planning"] is True
         eval_info = dataset.eval_info(token)
         assert np.array_equal(eval_info["trajectory"], loaded_targets["trajectory"])
         assert np.array_equal(eval_info["mask"], loaded_targets["trajectory_mask"])
+        assert eval_info["sample_interval_us"] == interval_us
         assert dataset.sequences() == [[0, 1]]
         profile = Profile(name=source, cameras=[cam["view"] for cam in features["cameras"]],
                           view_tokens=[f"<VIEW_{i}>" for i in range(len(features["cameras"]))],
-                          horizon=HORIZON, commands=["unknown"],
+                          horizon=horizon, pose_interval=interval_us / 1e6, commands=["unknown"],
                           command_prompts=["UNKNOWN"], status_layout=["vel_x", "vel_y"],
                           det_classes=["placeholder"], box_range=[-60, -60, 60, 60],
                           map_classes=["divider"], map_roi=[60, 30], ego_box=[1, 0, 0, 4, 2, 1, 0],
@@ -211,7 +245,7 @@ def check_cache_and_adapter(source, rows):
                           prompt_style="ego", use_occ_tokens=False)
         model_features, model_targets = prepare_sample(loaded_features, loaded_targets, profile)
         assert tuple(model_features["img"].shape) == (len(features["cameras"]), 3, 12, 16)
-        assert model_targets["gt_ego_fut_masks"].sum().item() == HORIZON
+        assert model_targets["gt_ego_fut_masks"].sum().item() == float(np.asarray(targets["trajectory_mask"]).sum())
         assert model_targets["gt_task_valid"]["planning"] is True
 
 
@@ -220,6 +254,25 @@ def main():
     lead = check_lead_mapping()
     check_cache_and_adapter("physicalai", pai)
     check_cache_and_adapter("lead", lead)
+    # v1 lead caches encode six 0.5 s targets; the new profile must reject, not reinterpret, them.
+    with tempfile.TemporaryDirectory() as temp:
+        features, targets, assets = copy.deepcopy(lead)
+        old_targets = copy.deepcopy(targets)
+        old_targets["trajectory"] = old_targets["trajectory"][:6]
+        old_targets["trajectory_mask"] = old_targets["trajectory_mask"][:6]
+        with ExternalCacheWriter(temp, "lead", "train", sample_interval_us=500_000,
+                                 target_horizon=6) as writer:
+            writer.write_sample("old-lead", features, old_targets, assets)
+        metadata_path = Path(temp) / "splits" / "train" / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata = {key: value for key, value in metadata.items()
+                    if key not in ("sample_interval_us", "target_horizon")}
+        metadata["schema"] = "unidrivevla.external.v1"
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        old_dataset = ExternalCacheDataset(temp, "lead", "train")
+        assert (old_dataset.sample_interval_us, old_dataset.target_horizon) == (500_000, 6)
+        _must_fail(lambda: old_dataset.validate_sampling(TARGET_INTERVAL_US, HORIZON),
+                   "reconvert this split instead of reinterpreting its labels")
     # A valid six-camera legacy cache must fail clearly under the seven-camera PAI profile.
     with tempfile.TemporaryDirectory() as temp:
         features, targets, assets = copy.deepcopy(pai)
@@ -239,12 +292,14 @@ def main():
         features, targets, assets = copy.deepcopy(lead)
         targets["trajectory"][0, 0] = np.nan
         targets["trajectory_mask"][0] = 0
-        with ExternalCacheWriter(temp, "lead", "train") as writer:
+        with ExternalCacheWriter(temp, "lead", "train", sample_interval_us=TARGET_INTERVAL_US,
+                                 target_horizon=HORIZON) as writer:
             writer.write_sample("missing-first-future", features, targets, assets)
     with tempfile.TemporaryDirectory() as temp:
         features, targets, assets = copy.deepcopy(lead)
         targets["trajectory"][0, 0] = np.nan
-        with ExternalCacheWriter(temp, "lead", "train") as writer:
+        with ExternalCacheWriter(temp, "lead", "train", sample_interval_us=TARGET_INTERVAL_US,
+                                 target_horizon=HORIZON) as writer:
             _must_fail(lambda: writer.write_sample("nan-supervised-future", features, targets, assets),
                        "supervised trajectory coordinates must be finite")
     with tempfile.TemporaryDirectory() as temp:

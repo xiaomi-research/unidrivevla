@@ -25,7 +25,7 @@ features
                           of this frame in a world frame; together they let temporal models carry state across frames
     augment               set by the training loader, not by sources: {"flip", "rotate"} of the frame's sequence
 targets (empty at test time)
-    trajectory            (T, 3) future ego poses, every future step the source has
+    trajectory            (T, 3) future ego poses at the profile's pose_interval, every future step the source has
     trajectory_mask       (T,)
     boxes                 (N, 7) x, y, z, length, width, height, yaw
     box_velocity          (N, 2)
@@ -42,7 +42,7 @@ targets (empty at test time)
                           all six flags; legacy sources may omit the mapping (other tasks fully supervised,
                           occupancy optional and enabled only when occ_path exists).
 
-A source with frame order has `sequences()`: lists of dataset indices, each in time order (0.5 s apart), which the
+A source with frame order has `sequences()`: lists of dataset indices, each in time order at its source cadence, which the
 training loader feeds consecutively.
 """
 

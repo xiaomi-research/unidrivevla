@@ -302,6 +302,7 @@ def _production_ar_loss(weight):
     nn.Module.__init__(head)
     qwen = FakeQwen()
     head.ar_loss_weight = float(weight)
+    head.hf_attn_impl = inspect.signature(QwenVL3APlanningHead.__init__).parameters["hf_attn_impl"].default
     head.qwen3_vl_with_expert = types.SimpleNamespace(
         qwen3_vl=qwen,
         processor=types.SimpleNamespace(tokenizer=types.SimpleNamespace(pad_token_id=0)),
@@ -312,6 +313,8 @@ def _production_ar_loss(weight):
         "ar_labels": torch.tensor([[-100, 2, 0], [-100, 4, 5]], dtype=torch.long),
     }
     result = QwenVL3APlanningHead.forward_ar_batch(head, batch)
+    check(qwen.language_model.config._attn_implementation == qwen.visual.config._attn_implementation
+          == head.hf_attn_impl, "forward_ar_batch retains the head's configured HF backend")
     raw_expected = 3.0 * qwen.weight.detach() + 1.25
     scaled_expected = float(weight) * raw_expected
     check(torch.allclose(result["loss_vlm_raw"], raw_expected), "forward_ar_batch reports the unscaled raw AR loss")

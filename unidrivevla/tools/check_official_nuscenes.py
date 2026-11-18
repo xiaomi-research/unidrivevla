@@ -445,7 +445,7 @@ def compare_fields(split, token, data, ours_f, ours_t, rotation, report, atol, t
     report.observe(prefix + "T_global_inv", ours_f["img_metas"]["T_global_inv"],
                    np.linalg.inv(as_np(data["T_global"]) @ inv_axes), atol["T_global_inv"], token)
     status = as_np(data["ego_status"]).reshape(-1)
-    report.observe(prefix + "ego_status", ours_f["ego_status"].numpy(), status[:6], atol["ego_status"], token)
+    report.observe(prefix + "ego_status", ours_f["ego_status"].numpy(), status, atol["ego_status"], token)
     if status.shape != (10,):
         check(False, f"ego_status length {status.shape} at {token}, the converter writes 10")
     hist = as_np(data.get("hist_traj"))

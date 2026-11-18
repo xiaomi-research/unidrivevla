@@ -1,21 +1,21 @@
 # UniDriveVLA
 
-一个 Qwen3-VL 自动驾驶 VLA 训练包。单 profile 配方覆盖 NAVSIM 1.1 / 2.0、nuScenes、Bench2Drive；另有多 profile 混训、PhysicalAI-AV / LEAD 离线缓存适配，以及 NeuroNCAP / HUGSIM 闭环客户端。完整仓库根目录是上一层 `Code/`，这里是 `Code/unidrivevla/` 包目录。以下训练命令在包目录执行；在 `Code/` 执行时使用 `python unidrivevla/train.py` 或 `python unidrivevla/tools/...`。`train.py` / `infer.py` / `tools/*.py` 会将包的父目录放进 `sys.path`，也可在包目录 `pip install -e .`。
+一个 Qwen3-VL 自动驾驶 VLA 训练包。单 profile 配方覆盖 NAVSIM 1.1 / 2.0、nuScenes、Bench2Drive；另有多 profile 混训、PhysicalAI-AV / LEAD 离线缓存适配，以及 Bench2Drive / LEAD / NeuroNCAP / HUGSIM 闭环客户端。完整仓库根目录是上一层 `Code/`，这里是 `Code/unidrivevla/` 包目录。以下训练命令在包目录执行；在 `Code/` 执行时使用 `python unidrivevla/train.py` 或 `python unidrivevla/tools/...`。`train.py` / `infer.py` / `tools/*.py` 会将包的父目录放进 `sys.path`，也可在包目录 `pip install -e .`。
 
 官方训练栈保留在上层 `Code/nuScenes/` 与 `Code/Bench2Drive/`，本包不通过它们的 MMCV runner 训练。这里重新实现了 stage 1 / stage 2 配方（见文末差异）；NAVSIM、PhysicalAI-AV 和 LEAD 也不是 main 的官方训练 recipe。main 代码对照固定为 commit `a93c175`。代码级 oracle、合成 CPU 检查和真实数据/硬件验收是不同证据，当前没有完整的 GPU 收敛与性能对照，所以不宣称与 main 全量数值等价或达到最优性能。
 
 当前边界：nuScenes / Bench2Drive 的原生 LiDAR 输入、head 配置和开环 metric helper 有 main 对照；小规模真实样本检查不代表完整训练。多 profile、PhysicalAI-AV、LEAD 是本仓新训练路径；NeuroNCAP / HUGSIM 是已实现协议客户端的闭环评测系统，不是数据集。合成 CPU fixture 不代表许可数据转换、完整训练、闭环 rollout 或官方分数通过。
 
-完整七项需求、源码版本与证据范围、失败历史、使用方式及后续 GPU 验收见 [终版交付与验收说明](docs/ACCEPTANCE.md)。
+`quirk-fix` 的实验命令见本页的 nuScenes PR #10、Bench2Drive、NAVSIM occupancy 和 LEAD 小节。历史检查的源码版本和范围见 [验收记录](docs/ACCEPTANCE.md)。
 
 | 能力 | 当前实现 | 尚未验收 |
 |---|---|---|
-| nuScenes | main 的 raw LiDAR frame / 固定 prompt cap、训练 profile、strict/loose metric helper；真实 mini train/val 抽样对照 | 完整 trainval GPU 训练、loss/gradient/prediction parity；loose 指标还需官方 segmentation PKL |
+| nuScenes | 原生 LiDAR profile、PR #10 2B without-ego 训练与五项评分入口、main 开环规划指标 | 完整 trainval GPU 训练、原始分数复现 |
 | Bench2Drive | main 的 raw LiDAR frame / 固定 prompt cap、数据与 ST-P3 metric helper；真实信息文件样本对照；CARLA Leaderboard adapter | 完整数据 GPU 训练；CARLA rollout 与官方分数 |
 | NAVSIM 1.1 / 2.0 | 各自 cache/profile/agent 和对应 PDMS / EPDMS 子进程入口 | 真实训练配置和各版本官方 score replay；两个版本、split 与协议不能混报 |
 | 多来源 / 多 profile | 一个共享 Qwen/VLM 与 experts，profile 私有 head；同一 global batch 只采一个来源；单 profile checkpoint 可显式迁移 | 真实多来源 GPU 混训、收敛和最终评测；CPU 双 rank 精确续训通过 |
 | PhysicalAI-AV | 七相机 profile、官方 SDK 离线转换器、只读 canonical cache、masked planning loss | 许可数据全量转换、训练与官方评分 |
-| LEAD | 官方 SceneLoader/Py123D 离线转换器；输入使用定位观测，未来标签以当前精确 IMU pose 为原点 | 许可数据转换、训练和官方评分 |
+| LEAD | SceneLoader/Py123D 离线转换器；在线传感器适配器、独立模型服务和官方 evaluator 启动器 | 许可数据转换、真实训练、CARLA rollout 和官方评分 |
 | VQA + planning | main JSONL AR 解析/collator、combined / alternate 调度、VQA-only 路径 | 真实语料上的多卡联合训练和生成质量 |
 | Bench2Drive CARLA / NeuroNCAP / HUGSIM | 已实现 Leaderboard、HTTP Model Node、FIFO 客户端；有合成协议与坐标检查 | simulator rollout 和官方得分均待跑 |
 
@@ -129,7 +129,8 @@ OpenScene 日志、sensor blobs、nuPlan maps 按 NAVSIM 自己的 `docs/install
 |---|---|---|
 | `VLM_PRETRAINED_PATH` | `/data/yongkangli/ckpts/Qwen3-VL-2B-Instruct` | `agent.vlm_path` |
 | `UNIDRIVE_EXP_ROOT` | `/data/yongkangli/UniDriveVLA/exp` | `output_dir` 的前缀 |
-| `UNIDRIVE_ANCHORS_ROOT` | `/data/yongkangli/UniDriveVLA/anchors` | `profile.anchors_dir` |
+| `UNIDRIVE_ANCHORS_ROOT` | `/data/yongkangli/UniDriveVLA/anchors` | 通用与旧坐标系 profile 的 anchors 根目录 |
+| `UNIDRIVE_NATIVE_ANCHORS_ROOT` | `/data/yongkangli/UniDriveVLA/anchors` | native nuScenes / Bench2Drive 使用其下的 `native/nuscenes`、`native/b2d` |
 | `NUSCENES_INFOS` | `.../nuScenes/data/infos` | `nuscenes.info_dir` |
 | `NUSCENES_PATH_ROOT` | `.../nuScenes` | `nuscenes.path_root`（pkl 里图像相对路径的起点，即跑转换时的 cwd） |
 | `NUSCENES_ROOT` | `.../nuScenes/data/nuscenes` | `nuscenes.data_root`（`v1.0-trainval/scene.json`，只在有 occ 时读） |
@@ -144,7 +145,7 @@ OpenScene 日志、sensor blobs、nuPlan maps 按 NAVSIM 自己的 `docs/install
 
 ### NAVSIM sample cache
 
-先打上面的 `load_image_path` 补丁，再在训练 env 里：
+先打上面的 `load_image_path` 补丁。下面只准备缓存，从 `Code/unidrivevla/` 运行：
 
 ```bash
 export NAVSIM_DEVKIT_ROOT=/path/to/navsim1.1
@@ -152,35 +153,45 @@ export OPENSCENE_DATA_ROOT=/path/to/openscene
 export NUPLAN_MAPS_ROOT=/path/to/maps
 export NUPLAN_MAP_VERSION=nuplan-maps-v1.0
 export NAVSIM_EXP_ROOT=/path/to/exp
-NAVSIM_TREE=1.1 DATA=navsim CACHE=1 bash scripts/train/run_unidrivevla_train.sh
-```
-
-`CACHE=1` 时启动器先跑：
-
-```text
-python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_dataset_caching.py \
-  hydra.searchpath=[pkg://navsim.planning.script.config.common,file://<本仓库>/config] \
+export NAVSIM_TREE=1.1
+export PYTHONPATH="$NAVSIM_DEVKIT_ROOT:$(dirname "$PWD")${PYTHONPATH:+:$PYTHONPATH}"
+python "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_dataset_caching.py" \
+  "hydra.searchpath=[pkg://navsim.planning.script.config.common,file://$PWD/config]" \
   agent=unidrivevla_navsim experiment_name=unidrivevla_caching \
-  train_test_split=$TRAIN_TEST_SPLIT cache_path=$CACHE_PATH force_cache_computation=false
+  train_test_split=navtrain cache_path="$NAVSIM_EXP_ROOT/unidrivevla_sample_cache_navsim$NAVSIM_TREE" \
+  force_cache_computation=false
 ```
 
-`TRAIN_TEST_SPLIT` 缺省 `navtrain`。`CACHE_PATH` 缺省 `$NAVSIM_EXP_ROOT/unidrivevla_sample_cache_navsim${NAVSIM_TREE}`。`config/data/navsim.yaml` 里的 `cache_path` 没有版本后缀；启动器会覆盖它。`CACHE_OVERRIDES` 追加到缓存命令上。2.0 把 `NAVSIM_TREE=2.0`，`NAVSIM_DEVKIT_ROOT` 指向 `navsim2.0`。
+2.0 在单独的 shell 中把 `NAVSIM_TREE=2.0`、`NAVSIM_DEVKIT_ROOT` 指向 `navsim2.0`，再执行上面的缓存命令。训练启动器的 `CACHE=1` 会先建缓存、接着开训，支持 `TRAIN_TEST_SPLIT`、`CACHE_PATH` 与 `CACHE_OVERRIDES`。两版分别使用带版本后缀的 sample cache。
 
 PDMS 还要 metric cache。两个树的 `scripts/evaluation/run_metric_caching.sh` 参数名不同：
 
 ```bash
 # NAVSIM 1.1
-python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py \
+PYTHONPATH="$NAVSIM_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+python "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py" \
   train_test_split=navtest \
-  cache.cache_path=$NAVSIM_EXP_ROOT/metric_cache
+  cache.cache_path="$NAVSIM_EXP_ROOT/metric_cache_navsim1.1_navtest"
 
 # NAVSIM 2.0
-python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py \
+PYTHONPATH="$NAVSIM_DEVKIT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+python "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py" \
   train_test_split=navtest \
-  metric_cache_path=$NAVSIM_EXP_ROOT/metric_cache
+  metric_cache_path="$NAVSIM_EXP_ROOT/metric_cache_navsim2.0_navtest"
 ```
 
-训练时把这个目录传给启动器：`METRIC_CACHE_PATH=$NAVSIM_EXP_ROOT/metric_cache`。不传的话，打分脚本自己的配置也缺省到 `$NAVSIM_EXP_ROOT/metric_cache`。
+训练时用 `METRIC_CACHE_PATH` 传入对应版本与 split 的目录。NAVSIM 2.0 的两阶段评估使用 `navtest_two_stage`，用同名 split 单独生成 metric cache，评测时也选同一个 split。
+
+用 NAVSIM 1.1 训练 occupancy 时，沿用上面的缓存设置，准备与样本 token 对应的 `.npz` 标注和匹配的 9 类 VAE。
+
+```bash
+NAVSIM_TREE=1.1 NAVSIM_DEVKIT_ROOT=/path/to/navsim1.1 \
+  METRIC_CACHE_PATH="$NAVSIM_EXP_ROOT/metric_cache_navsim1.1_navtest" \
+  GPUS=4 DATA=navsim bash scripts/train/run_unidrivevla_train.sh \
+  occ_root=/path/to/navsim/occ occ_format=occ3d agent.vae_path=/path/to/occvae_navsim.pth
+```
+
+每个 `${token}.npz` 的 `semantics` 形状为 `(200, 200, 16)`。可用 `python tools/check_navsim_occ_loader.py --cache-dir <sample-cache> --occ-root <occ-root>` 检查真实缓存中有标签的样本是否打开了 occupancy 监督。
 
 ### nuScenes
 
@@ -264,14 +275,16 @@ python tools/convert_lead.py \
   --scene-split normal_view
 ```
 
-转换后在训练环境中使用 `DATA=physicalai` 或 `DATA=lead` 和对应 cache 环境变量。当前转换器只标记实际具有规划监督的样本；不会补造检测、地图、运动或 occupancy 标签。对应 evaluator 报告 mask 上的 `ADE`、`FDE`、`L2_1s`、`L2_2s`、`L2_3s` 和有效样本/waypoint 数。这些是本仓通用开环误差，不是 PhysicalAI-AV 或 LEAD 的官方 benchmark 分数。目前这两类数据没有设定 stage-2 epoch recipe；真实许可数据转换和训练尚未完成。
+转换后，在训练环境中传入对应的 cache 目录。两个转换器只提供自车规划监督。PhysicalAI 使用 6×0.5 秒，LEAD 使用 8×0.25 秒。旧 LEAD cache 需要在新目录重新转换。开环 evaluator 报告有效轨迹点上的 `ADE`、`FDE`、覆盖时间内的整秒 `L2` 和有效样本数。LEAD 的正式闭环评分见 [LEAD 闭环运行说明](docs/LEAD_CLOSEDLOOP.md)。真实数据转换和训练仍待验收。
 
 ```bash
 PHYSICALAI_CACHE_ROOT=/path/to/physicalai-cache GPUS=4 DATA=physicalai \
   bash scripts/train/run_unidrivevla_train.sh
-LEAD_CACHE_ROOT=/path/to/lead-cache GPUS=4 DATA=lead \
-  bash scripts/train/run_unidrivevla_train.sh
+LEAD_CACHE_ROOT=/path/to/lead-cache UNIDRIVE_EXTERNAL_ANCHORS_ROOT=/path/to/anchors \
+  GPUS=4 DATA=lead bash scripts/train/run_unidrivevla_train.sh stage=lead_stage1
 ```
+
+`lead_stage1` 使用 UniDriveVLA 的 Flow Matching 规划头，按 4 Hz 预测 8 个点。`UNIDRIVE_EXTERNAL_ANCHORS_ROOT` 指向训练前准备好的 anchor 目录。
 
 ### Anchors
 
@@ -299,13 +312,45 @@ python tools/fit_anchors.py --out /tmp/unidrivevla-native-smoke/nuscenes \
 
 ## 训练
 
+### 复现 PR #10 的 nuScenes 2B without-ego
+
+Stage 1 在独立的 ms-swift/Megatron 环境用 VQA 和轨迹 QA 做 SFT。PR #10 的 SFT 脚本有续行反斜杠后带注释的行，先去掉这些注释再运行副本。将 `NUSCENES_PR10_ROOT` 指向 PR #10 checkout，导出 `MODEL_PATH`、`DATASET_ROOT`、`SWIFT_ROOT`、`SAVE_DIR`，从有 `swift/cli/_megatron/sft.py` 的目录运行：
+
+```bash
+stage1_script=$(mktemp)
+git -C "$NUSCENES_PR10_ROOT" show 5fce121f4bf04eaf7e109880d4f26eed62c0eed0:pretrain_script/unidrivevla_nusc_2b_stage1.sh \
+  > "$stage1_script" &&
+sed -i -E 's/\\[[:blank:]]+#.*$/\\/' "$stage1_script" &&
+bash "$stage1_script"
+```
+
+把导出的 Hugging Face 模型和 tokenizer 目录交给下面的 Stage 2。这个流程不跑 CanBus SFT。
+
+Stage 2 在 `Code/unidrivevla/` 的训练环境运行。10 维 ego 状态用于模型和监督，prompt 无 ego 文本。加载 Stage 1 的 Hugging Face 权重，训练 VLM（RESPECT 与 projector LoRA）、perception 和 action experts，motion 关闭。该 profile 的 Qwen 视觉与 AR 分支使用 FlashAttention 2，三个 experts 的联合 attention 使用 SDPA。运行前确认训练环境里已有与 CUDA/PyTorch 匹配的 FlashAttention。
+
+```bash
+export VLM_PRETRAINED_PATH=/path/to/UniDriveVLA_Stage1_Nuscenes_2B
+export UNIDRIVE_NATIVE_ANCHORS_ROOT=/path/to/anchors  # 含 native/nuscenes
+export NUSCENES_INFOS=/path/to/infos
+export NUSCENES_PATH_ROOT=/path/to/nuscenes_repo_cwd
+export NUSCENES_ROOT=/path/to/nuscenes
+export NUSCENES_OCC_ROOT=/path/to/occ3d/gts
+export OCCWORLD_VAE_PATH=/path/to/occvae_latest.pth
+export COC_JSONL_PATH=/path/to/alpamayo_coc_train_with_nav.jsonl.gz
+GPUS=8 DATA=nuscenes bash scripts/train/run_unidrivevla_train.sh \
+  stage=nusc_2b_stage2 train.skip_validation=true evaluator.name=null
+```
+
+CoC 文件也可用未压缩的 `.jsonl`，token 须匹配训练集。配方是 20 epoch，每卡 batch 4、全局 batch 128、梯度裁剪 1.0。上面是 PR #10 的 8 卡配置。在单机 4 卡上可改 `GPUS=4`，每次更新的累积步数由 4 变成 8。训练命令关闭周期验证。训练后用这一配方产出的 `last.ckpt` 跑 [PR #10 五项评分](#pr-10-的-nuscenes-五项评分)。
+
+### 通用训练配方
+
 在 `Code/unidrivevla/` 包目录、训练 env 已激活时：
 
 ```bash
 export VLM_PRETRAINED_PATH=/path/to/Qwen3-VL-2B-Instruct
 export UNIDRIVE_EXP_ROOT=/path/to/exp
 export UNIDRIVE_ANCHORS_ROOT=/path/to/anchors
-export NAVSIM_DEVKIT_ROOT=/path/to/navsim1.1
 ```
 
 Stage 1 训练视觉塔和语言模型 LoRA（`r=64`，`lora_alpha=128`，目标模块 `q,k,v,o,gate,up,down`），任务是 det + map + ego，不开 motion。Stage 2 加载 stage 1 的 `last.ckpt`，打开 motion，冻结 VLM（含 LoRA），`lr=1e-4`。
@@ -336,12 +381,18 @@ GPUS=8 DATA=b2d bash scripts/train/run_unidrivevla_train.sh
 export STAGE1_CHECKPOINT=/path/to/actual-b2d-stage1-run/last.ckpt
 GPUS=8 DATA=b2d bash scripts/train/run_unidrivevla_train.sh stage=stage2
 
-# NAVSIM 没有官方 epoch。stage 1 缺省 10。stage 2 的配置里没有 stage2_max_epochs，要用 +stage2_max_epochs
-NAVSIM_TREE=1.1 GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh
+# NAVSIM stage 1 缺省 10 epoch。每条命令选择对应的 devkit 和 metric cache
+NAVSIM_TREE=1.1 NAVSIM_DEVKIT_ROOT=/path/to/navsim1.1 \
+  METRIC_CACHE_PATH="$NAVSIM_EXP_ROOT/metric_cache_navsim1.1_navtest" \
+  GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh
 export STAGE1_CHECKPOINT=/path/to/actual-navsim-stage1-run/last.ckpt
-NAVSIM_TREE=1.1 GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh \
+NAVSIM_TREE=1.1 NAVSIM_DEVKIT_ROOT=/path/to/navsim1.1 \
+  METRIC_CACHE_PATH="$NAVSIM_EXP_ROOT/metric_cache_navsim1.1_navtest" \
+  GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh \
   stage=stage2 +stage2_max_epochs=10
-NAVSIM_TREE=2.0 GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh
+NAVSIM_TREE=2.0 NAVSIM_DEVKIT_ROOT=/path/to/navsim2.0 \
+  METRIC_CACHE_PATH="$NAVSIM_EXP_ROOT/metric_cache_navsim2.0_navtest" \
+  GPUS=8 DATA=navsim bash scripts/train/run_unidrivevla_train.sh
 
 # 冒烟：1 卡，不按 128 的 global batch 累积，只跑 2 个 optimizer step
 GPUS=1 MAX_STEPS=2 DATA=nuscenes bash scripts/train/run_unidrivevla_train.sh train.global_batch=0 dataloader.params.batch_size=1
@@ -349,17 +400,19 @@ GPUS=1 MAX_STEPS=2 DATA=nuscenes bash scripts/train/run_unidrivevla_train.sh tra
 
 `experiment_name` 缺省 `unidrivevla_${data_loader}_${UNIDRIVE_RUN_MODE}_${UNIDRIVE_RUN_ID}`，启动器为每个新 run 生成 ID，输出在 `$UNIDRIVE_EXP_ROOT/<experiment_name>/`。Stage 2 要指向实际 Stage 1 输出中的 `last.ckpt`；不要按旧的静态实验名猜路径。也可显式设置一个尚不存在的 `experiment_name`。启动器把额外参数原样传给 Hydra。`MASTER_PORT` 缺省 29517。
 
-不用启动器时（同样的覆盖）：
+直接用 `torchrun` 启动时，给同一组 rank 设置两个新的共享 ID：
 
 ```bash
+export UNIDRIVE_RUN_ID=$(python -c 'import uuid; print(uuid.uuid4().hex)')
+export UNIDRIVE_INVOCATION_ID=$(python -c 'import uuid; print(uuid.uuid4().hex)')
 torchrun --nnodes=1 --nproc_per_node=8 --master_port=29517 train.py data=nuscenes
 ```
 
-这时要自己保证 `navsim` 和本包都在 `PYTHONPATH` 上。`pip install -e .` 之后本包不必再靠目录名。
+每次直接启动都重新生成 ID。运行 NAVSIM 时，另按上面的缓存示例设置所选 devkit 的 `PYTHONPATH`、`train_test_split`、`cache_path` 和 metric cache。
 
 ### 多 profile 混合训练
 
-`DATA=multidomain` 会自动选择 `agent=multidomain`。默认 `config/data/multidomain.yaml` 同时配置 nuScenes、Bench2Drive 和 NAVSIM；启动前要准备三个来源的数据、缓存、anchors 和 profile 依赖。`NAVSIM_TREE` / `NAVSIM_DEVKIT_ROOT` 仍需设置，即使当前要调的数据源列表未包含 NAVSIM。
+`DATA=multidomain` 会自动选择 `agent=multidomain`。默认 `config/data/multidomain.yaml` 同时配置 nuScenes、Bench2Drive 和 NAVSIM。启动前要准备三个来源的数据、缓存、anchors 和 NAVSIM devkit。
 
 ```bash
 NAVSIM_TREE=1.1 GPUS=4 DATA=multidomain bash scripts/train/run_unidrivevla_train.sh
@@ -433,20 +486,35 @@ JSONL 使用 main 的 `image`（单路径、路径列表或无图片）和 `conv
 训练导出的新 checkpoint 还保存 `compute_parameter_dtypes`：DDP 记录实际参数 dtype，FSDP 记录分片参数的执行 dtype 和忽略参数的原 dtype。推理严格加载全部权重后校验完整映射，再恢复各浮点参数的精度，保留共享参数身份及 buffer dtype；不允许错误或缺失条目静默降级。旧 checkpoint 没有此映射时保持原加载行为。
 
 ```bash
-torchrun --nnodes=1 --nproc_per_node=8 --master_port=29517 infer.py \
-  data=nuscenes agent.checkpoint_path=/path/to/last.ckpt
-torchrun --nnodes=1 --nproc_per_node=8 --master_port=29517 infer.py \
-  data=b2d agent.checkpoint_path=/path/to/last.ckpt
-torchrun --nnodes=1 --nproc_per_node=8 --master_port=29517 infer.py \
-  data=navsim agent.checkpoint_path=/path/to/last.ckpt \
-  train_test_split=navtest evaluator.split=navtest
+python infer.py data=nuscenes nuscenes.occ_root=null agent.checkpoint_path=/path/to/nuscenes/last.ckpt
+python infer.py data=b2d agent.checkpoint_path=/path/to/b2d/last.ckpt
+# NAVSIM 1.1 或 2.0，先按缓存小节设置对应版本和 PYTHONPATH
+python infer.py data=navsim agent.checkpoint_path=/path/to/navsim/last.ckpt \
+  train_test_split=navtest evaluator.split=navtest \
+  +evaluator.metric_cache_path="$NAVSIM_EXP_ROOT/metric_cache_navsim${NAVSIM_TREE}_navtest"
 ```
 
 nuScenes / Bench2Drive 的 evaluator 是开环，按本仓 main 的实际入口分别计算，结果写到 `output_dir/eval/<name>/<tag>/*_metrics.json`；重复 tag 会分配 `_run_NNN` 新目录并保留旧结果。评分子进程非零退出、缺少分数文件或分布式任一 rank 报错都会让训练/推理命令以非零码结束，具体记录在 `eval.log` / `eval_error.txt`。nuScenes strict 使用旋转自车框与原始 LiDAR 未来框；若存在 `NUSCENES_PLANNING_SEG_PKL` 或 `evaluator.seg_pkl_path` 指向的官方 segmentation PKL，还计算 main 的 loose 指标。默认寻找 `nuscenes.info_dir/planing_gt_segmentation_val`（保留官方文件名拼写）；缺少时明确标记 loose 不可用。Bench2Drive 使用当前帧经官方过滤的 actor 及 future/yaw 标签构建 ST-P3 occupancy。PhysicalAI-AV / LEAD 的 evaluator 仅计算 cache 内已标记为有效的 planning waypoint `ADE`、`FDE` 和分秒 `L2`；这些是通用开环诊断，不是官方数据集 benchmark metric。CARLA 闭环使用下面的独立官方 evaluator 入口。
 
-精确复用官方栅格 footprint 需要 `scikit-image==0.24.0`（已加入依赖）。当前服务器的旧 navsim 环境缺少它；本轮 oracle 只在临时 dependency 目录中验证，没有修改该环境。正式运行新开环评测前应满足这项依赖。
+### PR #10 的 nuScenes 五项评分
 
-NAVSIM：1.1 用 `run_pdm_score.py`（PDMS）。2.0 目录名是 `navsim2.0` 且 split 以 `two_stage` 结尾时用 `run_pdm_score.py`（两阶段 EPDMS）；单阶段 split 在 devkit 有 `run_pdm_score_one_stage.py` 时用它（区分一、二阶段打分的 2.x 版本），否则用 `run_pdm_score.py`（v2.0 本身，即 commit `cf08b01`）。训练过程中的评测在训练 GPU 上出轨迹，CPU 上用 replay agent 打分。`evaluator.split` 缺省 `navtest`。`evaluator.every_n_epochs=0` 表示训练中不评，`on_end=true` 表示结束时评。
+`evaluator.name=nuscenes_pr10` 启用检测、跟踪、地图、规划和 10 维 ego 状态，motion 关闭。模型环境负责推理，模型释放后由独立的 PR10 Python 环境通过原 `NuScenes3DDataset.evaluate` 打分。MMCV / MMDetection 依赖留在这个环境。准备固定 commit 的 PR10 checkout，保持 `nuScenes/projects/` 干净。沿用 Stage 2 的三个 nuScenes 路径变量。评分需要 `v1.0-trainval` 数据、`NUSCENES_INFOS` 下的 `nuscenes_infos_val.pkl`、`vad_nuscenes_infos_temporal_val.pkl`，以及官方规划 segmentation PKL。推理还需要 checkpoint 记录的模型、anchors 与 VAE 路径可访问。如果迁移了模型目录，用 `agent.vlm_path` 指向新的 Stage 1 导出目录。
+
+```bash
+export NUSCENES_PR10_ROOT=/path/to/pr10-checkout  # Git commit 5fce121f4bf04eaf7e109880d4f26eed62c0eed0
+export NUSCENES_PR10_PYTHON=/path/to/pr10-eval-env/bin/python
+export NUSCENES_PLANNING_SEG_PKL=/path/to/planing_gt_segmentation_val
+env -u PYTHONPATH -u PYTHONHOME CUDA_VISIBLE_DEVICES= PYTHONNOUSERSITE=1 \
+  "$NUSCENES_PR10_PYTHON" -c 'import mmcv, torch, nuscenes; from mmdet.datasets import build_dataset'
+env -u VLM_PRETRAINED_PATH python infer.py data=nuscenes evaluator.name=nuscenes_pr10 nuscenes.occ_root=null \
+  agent.checkpoint_path=/path/to/nusc_2b_stage2/last.ckpt
+```
+
+使用 native Stage 2 导出的 `last.ckpt`。多卡可用 `torchrun`，按训练示例生成一组新的共享 `UNIDRIVE_RUN_ID`、`UNIDRIVE_INVOCATION_ID`。评估 batch size 固定为 1，按完整场景分给各 rank。也可将训练命令的 `evaluator.name=null` 改为 `evaluator.name=nuscenes_pr10`，在训练结束后评分。查看 `eval/nuscenes_pr10/<tag>/nuscenes_pr10_metrics.json`、`nuscenes_pr10_coverage.json` 和 `eval.log`。严格与宽松规划表见日志，覆盖数用来核实两次评估比较的是同一批样本。
+
+精确复用官方栅格 footprint 需要 `scikit-image==0.24.0`（已加入依赖）。运行新开环评测的环境需要具备该依赖；2031/navsim 经用户单独授权补齐四个缺包后的安装和 CPU 检查回执保存在本地任务证据目录，不能据此假设其他环境也已补齐。
+
+NAVSIM 1.1 用 `run_pdm_score.py`，取 `average`（PDMS）。2.0 的 `navtest` 取单阶段全帧平均；有 `run_pdm_score_one_stage.py` 时用它，固定的 v2.0（`cf08b01`）则从 `run_pdm_score.py` 取 `average_all_frames`。`navtest_two_stage` 等两阶段 split 从 `run_pdm_score.py` 取官方加权结果（EPDMS）。官方标为无效的汇总会报错。周期评分用训练中的模型生成轨迹，官方脚本在 CPU 上用 replay agent 打分。训练结束和独立推理时，官方脚本从 checkpoint 加载模型，需要对应 split 的原始数据和 metric cache。`evaluator.split` 缺省 `navtest`，`evaluator.every_n_epochs=0` 只跳过周期评分，`on_end=true` 开启训练结束评分。
 
 ### Bench2Drive CARLA 闭环客户端
 
@@ -466,6 +534,10 @@ GPU_RANK=0 bash scripts/infer/run_b2d.sh
 输出目录、record 目录和结果 JSON 必须不存在；脚本拒绝覆盖旧实验。直接交给官方 evaluator 时，设置 `--agent` 为 `closedloop/bench2drive.py`、`--agent-config` 为 checkpoint，并把 `Code` 加入 `PYTHONPATH`、`B2D_LEADERBOARD_ROOT` 指向 devkit 的 `bench2drive/leaderboard`。CPU 检查覆盖主分支像素处理、标定、命令、控制后处理及十槽状态；尚未运行 CARLA 正式评分。
 
 没有 `agent_config` 的旧 Bench2Drive checkpoint 必须显式声明已经核实的坐标来源：旧 ego-axis 配方设置 `UNIDRIVE_CHECKPOINT_FRAME=ego`；原生 LiDAR 配方设置 `lidar`。旧 stage-2 checkpoint 还要设置 `UNIDRIVE_WITH_MOTION=1`。新 checkpoint 默认从 metadata 恢复架构；这两个变量可以不设置，显式值与 metadata 冲突时会拒绝加载。`UNIDRIVE_WITH_MOTION=0` 明确要求无 motion 架构，只接受 `0` 或 `1`。
+
+### LEAD CARLA 闭环客户端
+
+`closedloop/lead.py` 在官方 LEAD 环境中复用传感器、定位和 `WaypointTracker`。`closedloop/lead_server.py` 在 `navsim` 环境加载 checkpoint。`scripts/infer/run_lead.sh` 将适配器传给官方 evaluator，支持 standard / Bench2Drive 模式。环境、checkpoint 和启动命令见 [LEAD 闭环运行说明](docs/LEAD_CLOSEDLOOP.md)。真实 CARLA rollout 和官方分数尚未验收。
 
 ### NeuroNCAP / HUGSIM 闭环客户端
 
@@ -543,6 +615,13 @@ $PY -B $CHECKER --root $BUNDLE --native-anchors $ANCHORS --vqa-image $IMAGE \
 | `python tools/check_vqa.py` | CPU：main AR tokenizer/collator 对照、图片顺序、assistant 标签、纯 VQA 与联合 loss 梯度 |
 | `python tools/check_task_schedule.py` | CPU：联合 loss 求和、VQA 数据循环和任务顺序；不是完整网络多卡验证 |
 | `python tools/check_multidomain.py` | CPU、tiny stub：共享骨干/私有 heads、source routing、同质 batch、checkpoint 迁移与参数去重；不构造 Qwen 全模型 |
+| `python tools/check_peft_trainability.py` | CPU、tiny HF mock：真实 wrapper 构造和 WASP 注入、冻结、梯度、优化器及状态恢复 |
+| `python tools/check_lead_closedloop.py` | CPU 合成输入：LEAD 标定、历史、独立 HTTP 协议、控制/启动器契约；不运行 CARLA |
+| `python tools/check_lead_entrypoints.py` | CPU、官方 API stub：前端生命周期、控制器调用和 shell→官方 evaluator 启动契约 |
+| `python tools/check_release_recipes.py` | CPU：实际 Hydra 合成后的 nuScenes 2B without-ego、LEAD Stage 1 和通用配方 |
+| `python tools/check_nuscenes_pr10_eval.py` | CPU：预测导出、场景分片和官方评分接口校验 |
+| `python tools/check_navsim_occ_loader.py` | CPU：occupancy 标签、任务 mask 和匹配 VAE 路径 |
+| `python tools/check_navsim_scores.py` | CPU：NAVSIM 1.1/2.0 官方评分汇总行选择 |
 | `python tools/check_resume.py` | CPU / 小型 DDP fixture：RNG、sampler、task cursor 与梯度窗口恢复约束；不验证多小时真实训练 |
 | `python tools/check_eval_schedule.py` | CPU：FSDP2 评估前检查各 rank 前向次数和 profile 顺序；不一致时明确失败，避免 collective 等待 |
 | `python tools/check_streams.py` | CPU：显式混合来源切换时清空 temporal cache，避免跨来源读取历史 |
@@ -567,7 +646,7 @@ $PY -B $CHECKER --root $BUNDLE --native-anchors $ANCHORS --vqa-image $IMAGE \
 
 ## 配置开关
 
-- `data=navsim|nuscenes|b2d|multidomain|physicalai|lead`，`stage=stage1|stage2`。`DATA=multidomain` 启动器会自动选 `agent=multidomain`；直接调用 `train.py` 时要同时写 `data=multidomain agent=multidomain`。
+- `data=navsim|nuscenes|b2d|multidomain|physicalai|lead`，`stage=stage1|stage2|nusc_2b_stage2|lead_stage1`。`DATA=multidomain` 启动器会自动选 `agent=multidomain`。直接调用 `train.py` 时需要指定该 agent。
 - `agent.train_vlm`：stage 1 为 true（视觉塔 + LoRA）。stage 2 为 false。
 - `agent.with_motion`：stage 2 为 true。
 - `profile.ar_loss_weight`：main nuScenes `0.1`、main Bench2Drive `1.0`；旧 `b2d_ego` checkpoint profile 保持 `0.1`。`profile.enable_knowledge_insulation` 是另一项显式开关，不会随该权重默认开启。

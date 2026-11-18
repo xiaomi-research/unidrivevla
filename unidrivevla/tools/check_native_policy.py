@@ -48,6 +48,22 @@ class CaptureHead(nn.Module):
         return {"traj": self.trajectory.to(kwargs["img"].device).unsqueeze(0).expand(batch, -1, -1)}
 
 
+class PR10CaptureHead(CaptureHead):
+    qwen3_vl_with_expert = SimpleNamespace(qwen3_vl=SimpleNamespace(
+        config=SimpleNamespace(text_config=SimpleNamespace(hidden_size=2048))))
+
+    def forward_test(self, **kwargs):
+        result = super().forward_test(**kwargs)
+        assert kwargs["return_nuscenes_pr10"] and kwargs["use_gt_ego_status"] is False
+        result.update(ego_status_pred=torch.arange(10).unsqueeze(0).float(),
+                      det=[{"boxes_3d": torch.zeros(1, 9), "scores_3d": torch.tensor([0.8]),
+                            "labels_3d": torch.tensor([1]), "instance_ids": torch.tensor([99]),
+                            "cls_scores": torch.tensor([0.9])}],
+                      map=[{"vectors": [np.zeros((20, 2), dtype=np.float32)],
+                            "scores": np.array([0.7], np.float32), "labels": np.array([0])}])
+        return result
+
+
 def _policy(profile, trajectory):
     policy = UniDriveVLAPolicy.__new__(UniDriveVLAPolicy)
     nn.Module.__init__(policy)
@@ -89,10 +105,10 @@ def main():
         "coordinate_frame": "lidar",
         "native_to_ego": axes,
         "history_trajectory": np.zeros((4, 3), dtype=np.float32),
-        "ego_velocity": np.array([4.0, 0.2, 0.0], dtype=np.float32),
+        "ego_velocity": np.array([4.0, 0.2, 0.6], dtype=np.float32),
         "ego_acceleration": np.array([0.1, 0.2, 0.3], dtype=np.float32),
         "ego_angular_velocity": np.array([0.01, 0.02, 0.03], dtype=np.float32),
-        "ego_steer": 0.0,
+        "ego_steer": 0.4,
         "command": "straight",
         "timestamp": 1.0,
         "ego2global": _rotation(0.2, (10.0, 20.0, 0.0)),
@@ -102,6 +118,18 @@ def main():
     targets = {"trajectory": np.column_stack((trajectory, np.zeros(len(trajectory), dtype=np.float32))),
                "trajectory_mask": np.ones(len(trajectory), dtype=np.float32), "task_valid": task_valid}
     prepared = prepare_sample(features, targets, profile)
+    prediction_features, prediction_targets = prepare_sample(features, {}, profile)
+    assert set(prediction_features) == set(prepared[0]) and not prediction_targets
+    for key, value in prediction_features.items():
+        full = prepared[0][key]
+        if torch.is_tensor(value):
+            assert torch.equal(value, full), key
+        elif key == "img_metas":
+            assert value.keys() == full.keys()
+            for name in value:
+                np.testing.assert_array_equal(value[name], full[name])
+        else:
+            assert value == full, key
     feature_batch, target_batch = _batch(prepared)
     policy = _policy(profile, trajectory)
     output = policy(feature_batch, target_batch)
@@ -112,8 +140,21 @@ def main():
     assert torch.allclose(head["projection_mat"][0, 0],
                           torch.from_numpy(intrinsic4 @ np.linalg.inv(features["cameras"][0]["sensor2ego"])).float(),
                           atol=1e-5)
-    assert torch.allclose(head["ego_status"][0], torch.tensor([0.1, 0.2, 0.3, 0.01, 0.02, 0.03]))
+    assert profile.status_layout == ["acc_x", "acc_y", "acc_z", "rot_x", "rot_y", "rot_z",
+                                     "vel_x", "vel_y", "vel_z", "steer"]
+    assert torch.allclose(head["ego_status"][0],
+                          torch.tensor([0.1, 0.2, 0.3, 0.01, 0.02, 0.03, 4.0, 0.2, 0.6, 0.4]))
     assert torch.allclose(head["hist_traj"][0], torch.zeros((4, 2)))
+    assert "nuscenes_pr10" not in output
+    pr10_policy = _policy(profile, trajectory)
+    pr10_policy.head = PR10CaptureHead(trajectory)
+    pr10_policy.with_motion = False
+    full = pr10_policy({**feature_batch, "return_nuscenes_pr10": True, "use_gt_ego_status": True})
+    row = full["nuscenes_pr10"][0]
+    assert row["instance_ids"].tolist() == [99] and "cls_scores" in row
+    assert torch.equal(row["final_planning"], torch.from_numpy(trajectory))
+    assert torch.equal(row["ego_status_pred"], torch.arange(10).float())
+    assert row["vectors"].shape == (1, 20, 2) and all(torch.is_tensor(v) for v in row.values())
     expected_public = torch.from_numpy(trajectory) @ torch.from_numpy(axes[:2, :2].T).float()
     assert torch.allclose(output["pred_traj"][0, :, :2], expected_public, atol=1e-5)
     assert torch.allclose(output["pred_traj_head"][0, :, :2], torch.from_numpy(trajectory), atol=1e-5)

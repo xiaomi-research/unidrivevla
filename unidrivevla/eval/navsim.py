@@ -60,6 +60,19 @@ class NavsimEvaluator(SubprocessEvaluator):
             raise ValueError(f"split {self.split()} needs the NAVSIM 2.0 devkit, found {root}")
         return False
 
+    def aggregate_tokens(self, root: Path) -> tuple:
+        """Exact official aggregate row names for the selected devkit and split protocol."""
+        if root.name == "navsim1.1":
+            return ("average",)
+        if root.name == "navsim2.0":
+            if self.two_stage(root):
+                return ("pseudo_closed_loop", "extended_pdm_score_combined")
+            if scoring_entry(root, False) == TWO_STAGE_ENTRY:
+                # v2.0 emits a pseudo-closed-loop row even for splits with no second-stage scenes.
+                return ("average_all_frames",)
+            return ("average_all_frames", "average")
+        raise ValueError(f"cannot pick a NAVSIM aggregate row for devkit {root}")
+
     def overrides(self, config_dir: Path, out_dir: Path, tag: str, agent: str) -> List[str]:
         out = [
             f"hydra.searchpath=[pkg://navsim.planning.script.config.common,file://{config_dir.resolve().as_posix()}]",
@@ -166,4 +179,5 @@ class NavsimEvaluator(SubprocessEvaluator):
         csvs = sorted(out_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime)
         if not csvs:
             raise ValueError(f"no score csv in {out_dir}")
-        return {**average_row(csvs[-1]), "csv": str(csvs[-1])}
+        root = devkit_root()
+        return {**average_row(csvs[-1], self.aggregate_tokens(root)), "csv": str(csvs[-1])}

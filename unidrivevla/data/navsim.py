@@ -8,7 +8,6 @@ package imports without a NAVSIM tree.
 """
 
 import inspect
-import os
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -274,9 +273,18 @@ class SampleTargetBuilder:
 class WithTokens(Dataset):
     """(features, targets) of a NAVSIM dataset plus the scene token."""
 
-    def __init__(self, dataset, tokens, occ_root=None):
+    def __init__(self, dataset, tokens, occ_root=None, occ_format=None):
         self.dataset, self.tokens = dataset, list(tokens)
-        self.occ_root = occ_root
+        self.occ_root = Path(occ_root).expanduser().resolve() if occ_root else None
+        self.occ_format = occ_format
+
+    def _occ_path(self, token):
+        if not isinstance(token, str) or not token or token in (".", "..") or "/" in token or "\\" in token:
+            raise ValueError(f"NAVSIM occupancy token must be one flat path component, got {token!r}")
+        path = (self.occ_root / f"{token}.npz").resolve()
+        if path.parent != self.occ_root:
+            raise ValueError(f"NAVSIM occupancy path escapes occ_root for token {token!r}")
+        return path if path.is_file() else None
 
     def __len__(self):
         return len(self.dataset)
@@ -285,11 +293,43 @@ class WithTokens(Dataset):
         features, targets = self.dataset[index]
         token = self.tokens[index]
         if self.occ_root and not targets.get("occ_path"):
-            path = os.path.join(self.occ_root, f"{token}.npz")
-            if os.path.isfile(path):
+            path = self._occ_path(token)
+            if path is not None:
                 targets = dict(targets)
-                targets["occ_path"] = path
+                targets["occ_path"] = str(path)
+                if self.occ_format:
+                    targets["occ_format"] = str(self.occ_format)
+                explicit = targets.get("task_valid")
+                if isinstance(explicit, Mapping):
+                    occupancy = explicit.get("occupancy")
+                    if isinstance(occupancy, (bool, np.bool_)) and not bool(occupancy):
+                        flags = dict(explicit)
+                        flags["occupancy"] = True
+                        targets["task_valid"] = flags
         return features, normalize_navsim_targets(targets), token
+
+
+def _require_occ_vae(cfg, agent, split, occ_root):
+    """Fail before training if dense labels are enabled without a frozen pretrained decoder."""
+    if split == "test" or not occ_root:
+        return
+    profile = getattr(agent, "profile", None)
+    occ_classes = getattr(profile, "occ_classes", None)
+    if occ_classes is None:
+        occ_classes = OmegaConf.select(cfg, "profile.occ_classes")
+    if not occ_classes:
+        raise ValueError("NAVSIM occ_root is set but the selected profile disables the occupancy head")
+
+    # A profile view may deliberately select no VAE or a different VAE than the root config.
+    # Fall back only for older source adapters that do not expose the resolved per-source value.
+    path = getattr(agent, "vae_path") if hasattr(agent, "vae_path") else OmegaConf.select(cfg, "agent.vae_path")
+    if not path:
+        raise ValueError("NAVSIM occupancy training needs a source-specific pretrained OccWorld VAE checkpoint; "
+                         "set this source's agent.vae_path or OCCWORLD_VAE_PATH, or disable occupancy with "
+                         "occ_root=null")
+    vae_path = Path(path).expanduser()
+    if not vae_path.is_file():
+        raise FileNotFoundError(f"NAVSIM occupancy VAE checkpoint does not exist: {vae_path}")
 
 
 class AgentInputs(Dataset):
@@ -332,14 +372,16 @@ def navsim_loader(cfg, agent, split: str):
     features, targets = [SampleFeatureBuilder()], [SampleTargetBuilder()]
     logs = list(cfg.train_logs if split == "train" else cfg.val_logs)
     occ_root = OmegaConf.select(cfg, "occ_root")
+    occ_format = OmegaConf.select(cfg, "occ_format")
+    _require_occ_vae(cfg, agent, split, occ_root)
     if OmegaConf.select(cfg, "use_cache_without_dataset"):
         if cfg.force_cache_computation:
             raise AssertionError("force_cache_computation must be False when training from the cache")
         dataset = CacheOnlyDataset(cache_path=cfg.cache_path, feature_builders=features, target_builders=targets,
                                    log_names=logs)
-        return WithTokens(dataset, dataset.tokens, occ_root=occ_root)
+        return WithTokens(dataset, dataset.tokens, occ_root=occ_root, occ_format=occ_format)
     scene_filter.log_names = [n for n in scene_filter.log_names if n in logs] if scene_filter.log_names else logs
     loader = scene_loader(cfg, scene_filter)
     dataset = SceneDataset(scene_loader=loader, feature_builders=features, target_builders=targets,
                            cache_path=cfg.cache_path, force_cache_computation=cfg.force_cache_computation)
-    return WithTokens(dataset, loader.tokens, occ_root=occ_root)
+    return WithTokens(dataset, loader.tokens, occ_root=occ_root, occ_format=occ_format)

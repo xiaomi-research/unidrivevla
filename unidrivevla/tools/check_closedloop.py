@@ -136,8 +136,22 @@ def _check_neuro_ncap(profile):
     projection[:3, :3] = request["calibration"]["camera2image"][name]
     assert np.allclose(policy.last["projection_mat"][0, profile.cameras.index(view)], projection @ np.linalg.inv(sensor2ego), atol=1e-5)
     assert policy.last["img"][0, profile.cameras.index(view), :, 0, 0].tolist() == [37, 23, 11]
-    assert policy.last["ego_status"].shape == (1, 6)
+    assert policy.last["ego_status"].shape == (1, 10)
     assert np.allclose(policy.last["hist_traj"][0, -1].numpy(), [0, 0])
+
+    measured_history = np.array([[-3.0, 0.3, 0.1], [-2.0, 0.2, 0.05], [-1.0, 0.1, 0.01], [0, 0, 0]],
+                                dtype=np.float32)
+    explicit = PolicyRuntime(TinyPolicy(profile), "cpu")
+    explicit.predict(**decoded, history_trajectory=measured_history)
+    assert np.allclose(explicit.policy.last["hist_traj"][0].numpy(), measured_history[:, :2])
+    for invalid in (np.zeros((3, 3)), np.full((4, 3), np.nan), np.full((4, 3), 1e100)):
+        try:
+            explicit.predict(**{**decoded, "timestamp": decoded["timestamp"] + 0.5}, history_trajectory=invalid)
+        except ValueError as exc:
+            assert "history_trajectory" in str(exc)
+        else:
+            raise AssertionError("invalid explicit source history was accepted")
+    explicit.reset()
 
     request["timestamp"] += 500_000
     request["ego2world"] = _rigid(0.2, [10.0 + 0.5 * np.cos(0.2), 20.0 + 0.5 * np.sin(0.2), 0.0]).tolist()
@@ -672,11 +686,90 @@ def _check_checkpoint_frame_compatibility(profile):
     print("OK: legacy frame selection, metadata authority, stage-2 serving, multi-profile frame scope, and both public CLIs")
 
 
+def _check_lead_checkpoint_provenance():
+    from dataclasses import asdict
+    from check_multidomain import TinyCore, TinyHead, Tokenizer
+    from unidrivevla.adapters.multidomain import MultiProfilePolicy
+
+    profile_dir = Path(__file__).resolve().parents[1] / "config/profile"
+    profile = Profile.from_config(OmegaConf.load(profile_dir / "lead.yaml"))
+    profile = replace(profile, delta_mean=[0.2, -0.1], delta_std=[1.5, 2.0])
+    with tempfile.TemporaryDirectory(prefix="unidrivevla-lead-checkpoint-") as directory:
+        root = Path(directory)
+        config = {"_target_": "unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy", "profile": asdict(profile),
+                  "vlm_path": str(root), "with_motion": False}
+        checkpoint = root / "lead.ckpt"
+
+        def tiny_multi(values):
+            values = {key: value for key, value in values.items() if not key.startswith("_")}
+            return MultiProfilePolicy(
+                **values, _shared_core_factory=lambda **kwargs: TinyCore(kwargs["view_tokens"]),
+                _processor_factory=lambda _path, use_fast: SimpleNamespace(tokenizer=Tokenizer()),
+                _head_factory=TinyHead,
+            )
+
+        def tiny(agent_cfg, _recursive_):
+            assert _recursive_ is False
+            values = OmegaConf.to_container(agent_cfg, resolve=True)
+            if "profiles" in values:
+                return tiny_multi(values)
+            return TinyCheckpointPolicy(values["profile"], values["checkpoint_path"], values.get("checkpoint_frame"))
+
+        with patch("unidrivevla.serve.instantiate", side_effect=tiny) as instantiate_model:
+            for multi in (False, True):
+                saved = dict(config)
+                if multi:
+                    saved["_target_"] = "unidrivevla.adapters.multidomain.MultiProfilePolicy"
+                    saved["profiles"] = {
+                        "lead": saved.pop("profile"),
+                        "nuscenes": OmegaConf.to_container(OmegaConf.load(profile_dir / "nuscenes.yaml"), resolve=True),
+                    }
+                    original = tiny_multi(saved)
+                    with torch.no_grad():
+                        original.heads["lead"].private.fill_(3.0)
+                    state = {name: tensor.detach().clone() for name, tensor in original.state_dict().items()}
+                else:
+                    state = {"weight": torch.tensor(3.0)}
+                torch.save({"state_dict": state, "agent_config": saved}, checkpoint)
+                runtime = load_runtime("lead", checkpoint, "cpu")
+                assert runtime.profile.horizon == 8 and runtime.profile.pose_interval == 0.25
+                assert runtime.profile.delta_mean == profile.delta_mean and runtime.profile.delta_std == profile.delta_std
+                if multi:
+                    owner = runtime.policy.owner
+                    assert owner.heads["lead"].private.item() == 3.0
+                    assert owner.state_dict().keys() == state.keys()
+                    assert all(torch.equal(owner.state_dict()[name], tensor) for name, tensor in state.items())
+                else:
+                    assert runtime.policy.weight.item() == 3.0
+            for key, bad in (("horizon", 6), ("pose_interval", 0.5), ("frame", "lidar"),
+                             ("status_layout", ["speed"]), ("cameras", ["front"])):
+                saved = dict(config, profile={**config["profile"], key: bad})
+                torch.save({"state_dict": {}, "agent_config": saved}, checkpoint)
+                before = instantiate_model.call_count
+                try:
+                    load_runtime("lead", checkpoint, "cpu")
+                except ValueError as exc:
+                    assert "LEAD checkpoint profile" in str(exc)
+                else:
+                    raise AssertionError(f"incompatible LEAD profile {key} accepted")
+                assert instantiate_model.call_count == before
+            torch.save({"state_dict": {}}, checkpoint)
+            for frame in (None, "ego", "lidar"):
+                try:
+                    load_runtime("lead", checkpoint, "cpu", checkpoint_frame=frame)
+                except ValueError as exc:
+                    assert "agent_config" in str(exc) or "ego frame" in str(exc)
+                else:
+                    raise AssertionError("LEAD weights without profile provenance accepted")
+    print("OK: LEAD single/multi checkpoint load and preallocation rejection of legacy or incompatible profiles")
+
+
 def main():
     profile_cfg = OmegaConf.load(Path(__file__).resolve().parents[1] / "config" / "profile" / "nuscenes.yaml")
     profile = Profile.from_config(profile_cfg)
     _check_checkpoint_config(profile)
     _check_checkpoint_frame_compatibility(profile)
+    _check_lead_checkpoint_provenance()
     # Keep this check explicit about canonical EGO mode; native LiDAR conversion has its own regression.
     canonical_profile = replace(profile, frame="ego")
     _check_neuro_ncap(canonical_profile)

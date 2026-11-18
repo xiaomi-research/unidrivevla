@@ -18,14 +18,23 @@ LOG = logging.getLogger("unidrivevla.serve")
 PACKAGE = Path(__file__).resolve().parent
 
 
+def _validate_lead_profile(config):
+    # LEAD cache v1 used 6x0.5s; weights alone cannot prove the 8x0.25s online contract.
+    expected = OmegaConf.load(PACKAGE / "config" / "profile" / "lead.yaml")
+    for key in ("name", "frame", "horizon", "pose_interval", "cameras", "view_tokens", "commands", "status_layout"):
+        value = OmegaConf.select(config, key)
+        if value != expected[key]:
+            raise ValueError(f"LEAD checkpoint profile {key!r} must be {expected[key]!r}, got {value!r}")
+
+
 def load_runtime(profile="nuscenes", checkpoint=None, device="cuda", with_motion=None, vlm_path=None,
                  checkpoint_frame=None):
-    if profile not in {"nuscenes", "b2d", "navsim"}:
-        raise ValueError(f"unknown profile {profile!r}; choose nuscenes, b2d, or navsim")
+    if profile not in {"nuscenes", "b2d", "navsim", "lead"}:
+        raise ValueError(f"unknown profile {profile!r}; choose nuscenes, b2d, navsim, or lead")
     if checkpoint_frame not in (None, "ego", "lidar"):
         raise ValueError("checkpoint_frame must be null, 'ego', or 'lidar'")
-    if profile == "navsim" and checkpoint_frame == "lidar":
-        raise ValueError("NAVSIM checkpoints use the ego frame")
+    if profile in {"navsim", "lead"} and checkpoint_frame == "lidar":
+        raise ValueError(f"{profile.upper()} checkpoints use the ego frame")
     if not checkpoint or not Path(checkpoint).is_file():
         raise FileNotFoundError(f"inference requires an existing checkpoint file: {checkpoint!r}")
     metadata = load_checkpoint_agent_config(checkpoint)
@@ -38,6 +47,8 @@ def load_runtime(profile="nuscenes", checkpoint=None, device="cuda", with_motion
         if "profiles" in agent_cfg:
             if profile not in agent_cfg.profiles:
                 raise ValueError(f"checkpoint does not contain profile {profile!r}")
+            if profile == "lead":
+                _validate_lead_profile(agent_cfg.profiles[profile])
             saved_frame = OmegaConf.select(agent_cfg, f"profiles.{profile}.frame")
             if profile == "navsim" and saved_frame not in (None, "ego"):
                 raise ValueError("NAVSIM checkpoints must use the ego frame")
@@ -51,6 +62,8 @@ def load_runtime(profile="nuscenes", checkpoint=None, device="cuda", with_motion
         elif str(agent_cfg.profile.name) != profile:
             raise ValueError(f"checkpoint profile is {agent_cfg.profile.name!r}, not {profile!r}")
         else:
+            if profile == "lead":
+                _validate_lead_profile(agent_cfg.profile)
             saved_frame = OmegaConf.select(agent_cfg, "profile.frame")
             if profile == "navsim" and saved_frame not in (None, "ego"):
                 raise ValueError("NAVSIM checkpoints must use the ego frame")
@@ -61,6 +74,8 @@ def load_runtime(profile="nuscenes", checkpoint=None, device="cuda", with_motion
         if with_motion is not None and bool(with_motion) != bool(agent_cfg.with_motion):
             raise ValueError("requested motion architecture differs from the checkpoint agent_config")
     else:
+        if profile == "lead":
+            raise ValueError("LEAD inference requires saved agent_config with the verified 8x0.25s profile")
         if profile in {"nuscenes", "b2d"} and checkpoint_frame is None:
             raise ValueError(f"legacy {profile} checkpoints have no frame metadata; pass a verified --checkpoint-frame")
         profile_name = f"{profile}_ego" if profile in {"nuscenes", "b2d"} and checkpoint_frame == "ego" else profile

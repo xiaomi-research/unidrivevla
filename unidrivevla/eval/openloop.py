@@ -44,7 +44,7 @@ class OpenLoopEvaluator:
 
     def eval_loader(self, trainer):
         if self.loader is None:
-            from unidrivevla.data import LOADERS, make_loader
+            from unidrivevla.data import LOADERS
             from unidrivevla.data.registry import evaluation_params, with_worker_transform
 
             source_cfg = OmegaConf.merge(OmegaConf.create(), self.cfg,
@@ -52,9 +52,14 @@ class OpenLoopEvaluator:
             select_policy = getattr(trainer.agent, "policy_for_source", None)
             policy = select_policy(self.source) if callable(select_policy) else trainer.agent
             self.dataset = LOADERS[self.source](source_cfg, policy, "val")
-            self.loader = make_loader(with_worker_transform(self.dataset, policy), evaluation_params(trainer.cfg),
-                                      False, trainer.ctx.rank, trainer.ctx.world_size)
+            self.loader = self.make_eval_loader(with_worker_transform(self.dataset, policy),
+                                                evaluation_params(trainer.cfg), trainer.ctx)
         return self.loader
+
+    def make_eval_loader(self, dataset, params, ctx):
+        from unidrivevla.data import make_loader
+
+        return make_loader(dataset, params, False, ctx.rank, ctx.world_size)
 
     def during_training(self, trainer, ckpt: Path, tag: str) -> None:
         """Called on every rank with the model holding the weights to score."""
@@ -72,7 +77,7 @@ class OpenLoopEvaluator:
             policy = select_policy(self.source) if callable(select_policy) else trainer.agent
             sampling = policy.trajectory_sampling
             horizon_s = float(sampling.num_poses * sampling.interval_length)
-            if horizon_s < 3.0:
+            if self.source in ("nuscenes", "b2d") and horizon_s < 3.0:
                 raise ValueError(f"planning metrics need a 3 s horizon, the model predicts {horizon_s} s")
             samples = [(token, poses, self.dataset.eval_info(token)) for token, poses in predictions.items()]
             metrics = self.score(samples)

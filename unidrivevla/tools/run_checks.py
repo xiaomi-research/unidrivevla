@@ -13,7 +13,8 @@ CHECKS = ("checkpoint", "resume", "master_adamw", "vqa", "task_schedule", "targe
           "supervision", "image_pipeline", "official_heads", "planning_metrics", "closedloop", "external_sources",
           "external_eval", "eval_schedule", "b2d_closedloop", "insulation", "attention_contract", "run_paths",
           "eval_failures", "native_sources", "native_policy", "sequences", "motion_decoder", "optional_attention",
-          "gradient_reduction")
+          "gradient_reduction", "release_recipes", "release_sample_loss", "navsim_occ_loader", "navsim_scores",
+          "coc_link", "peft_trainability", "lead_closedloop", "lead_entrypoints", "nuscenes_pr10_eval")
 
 
 def main():

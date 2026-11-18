@@ -8,12 +8,13 @@ finish(final_ckpt) (main rank, (tag, metrics) pairs), and release()."""
 
 import csv
 import logging
+import math
 import os
 import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -251,19 +252,28 @@ def fresh_eval_dir(root: Path, tag: str) -> Path:
             index += 1
 
 
-def average_row(csv_path: Path) -> Dict[str, float]:
-    """Summary row of a NAVSIM score csv: `average*` (one-stage) or `extended_pdm_score_combined` (two-stage)."""
+def average_row(csv_path: Path, expected_tokens: Sequence[str]) -> Dict[str, float]:
+    """Read one explicitly selected NAVSIM aggregate row; never fall back to expert-only averages."""
+    expected = tuple(str(token) for token in expected_tokens)
+    if not expected or len(set(expected)) != len(expected):
+        raise ValueError("NAVSIM aggregate row tokens must be a nonempty, unique sequence")
     with open(csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
-    for row in reversed(rows):
-        if str(row.get("token", "")).startswith(("average", "extended_pdm_score_combined")):
-            out = {}
-            for key, value in row.items():
-                if not key:  # the csv's unnamed index column
-                    continue
-                try:
-                    out[key] = float(value)
-                except (TypeError, ValueError):
-                    continue
-            return out
-    raise ValueError(f"no average row in {csv_path}")
+    selected = [row for row in rows if str(row.get("token", "")).strip() in expected]
+    if len(selected) != 1:
+        found = [str(row.get("token", "")).strip() for row in selected]
+        raise ValueError(f"expected exactly one NAVSIM aggregate row from {expected}, found {found} in {csv_path}")
+    if str(selected[0].get("valid", "")).strip().lower() in ("false", "0"):
+        raise ValueError(f"NAVSIM scorer marked aggregate row {selected[0]['token']!r} invalid in {csv_path}")
+    out = {}
+    for key, value in selected[0].items():
+        if not key or key == "token":  # the CSV's unnamed index column is not a score
+            continue
+        try:
+            out[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+    score = next((out[key] for key in ("score", "pdm_score", "extended_pdm_score_combined") if key in out), None)
+    if score is None or not math.isfinite(score):
+        raise ValueError(f"NAVSIM aggregate row has no finite overall score in {csv_path}")
+    return out

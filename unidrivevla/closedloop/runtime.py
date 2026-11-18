@@ -108,7 +108,7 @@ class PolicyRuntime:
                 self._ring.reset()
 
     def predict(self, cameras, ego2global, timestamp, command, ego_velocity, ego_acceleration,
-                ego_angular_velocity, ego_steer=float("nan"), native_to_ego=None):
+                ego_angular_velocity, ego_steer=float("nan"), native_to_ego=None, history_trajectory=None):
         """Camera transforms and pose use canonical EGO axes; native profiles require their actual LiDAR axes."""
         with self._lock:
             try:
@@ -127,6 +127,13 @@ class PolicyRuntime:
                 if not isinstance(cameras, dict) or set(cameras) != required:
                     raise ValueError(f"profile {self.profile.name} requires cameras {sorted(required)}")
                 history = self.history.history(timestamp, pose)
+                if history_trajectory is not None:
+                    # A source can supply its measured canonical history, including observations before RPC startup.
+                    history = np.asarray(history_trajectory, dtype=np.float64)
+                    if (history.shape != (4, 3) or not np.isfinite(history).all()
+                            or np.any(np.abs(history) > np.finfo(np.float32).max)):
+                        raise ValueError("history_trajectory must contain finite float32-compatible 4x3 canonical poses")
+                    history = history.astype(np.float32)
                 if frame == "lidar":
                     history = _poses_to_native(history, axes)
                 prepared = self._prepare(cameras, pose, timestamp, command, ego_velocity, ego_acceleration,

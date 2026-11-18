@@ -24,3 +24,4 @@ delta_std: [1.8668, 0.3427]
 occ_classes: 9                 # free + background + 7 detection classes, matching occvae_navsim.pth
 occ_format: occ3d
 prefix_max_len: 0              # pad the prompt to the batch's longest only (null: the official fixed length)
+hf_attn_impl: sdpa             # standard HF vision/AR path; NAVSIM does not require optional flash-attn

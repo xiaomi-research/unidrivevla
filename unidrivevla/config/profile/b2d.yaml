@@ -30,6 +30,7 @@ zero_velocity_classes: [traffic_sign, traffic_cone, traffic_light]   # cached wi
 decoder_norm: false            # its unified decoder has no norm_layer: the "norm" operations are skipped
 prefix_max_len: 3670           # fixed length used by the official Bench2Drive main
 official_attention_mask: true  # main FlexAttention attends to fixed-length PAD positions
+hf_attn_impl: flash_attention_2  # preserve the official main Qwen3-VL vision/AR backend
 prompt_style: b2d              # speed / acceleration prompt, no PT_HIST
 enable_knowledge_insulation: false  # explicit main ablation; includes prompt-token CE when enabled
 use_hist_traj: false           # the official head has no history token

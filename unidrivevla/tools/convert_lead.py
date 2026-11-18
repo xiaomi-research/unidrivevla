@@ -6,7 +6,6 @@ provide disjoint lists for train/val/test. No CARLA process, simulator, download
 
 import argparse
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,36 +42,36 @@ def main():
     except ImportError as exc:
         raise SystemExit("run with the official LEAD main and its pinned py123d v0.7.0 installed") from exc
 
-    from unidrivevla.data.lead import HORIZON, INTERVAL_TICKS, TICK_US, exact_label_origin, lead_sample
+    from unidrivevla.data.lead import (HISTORY_INTERVAL_TICKS, HORIZON, TARGET_INTERVAL_TICKS,
+                                       TARGET_INTERVAL_US, TICK_US, exact_label_origin, lead_sample)
     from unidrivevla.data.external import ExternalCacheWriter
 
     log_names = read_log_names(args.log_list)
-    future_ticks = [i * INTERVAL_TICKS for i in range(1, HORIZON + 1)]
+    future_ticks = [i * TARGET_INTERVAL_TICKS for i in range(1, HORIZON + 1)]
     scene_filter = SceneFilter(split_names=args.scene_split or ["normal_view"], log_names=log_names,
-                               history_num_iterations=3 * INTERVAL_TICKS,
-                               future_num_iterations=HORIZON * INTERVAL_TICKS)
+                               history_num_iterations=3 * HISTORY_INTERVAL_TICKS,
+                               future_num_iterations=HORIZON * TARGET_INTERVAL_TICKS)
     loader = SceneLoader(data_root=Path(args.data_root).expanduser(), scene_filter=scene_filter,
-                         perturbation_probability=0.0, past_tick_ages=tuple(range(3 * INTERVAL_TICKS + 1)),
+                         perturbation_probability=0.0,
+                         past_tick_ages=tuple(range(3 * HISTORY_INTERVAL_TICKS + 1)),
                          tick_duration_us=TICK_US, read_lidar_sweeps=False, read_radar_sweeps=False,
                          read_semantic_cameras=False, read_depth_cameras=False, read_map_api=False)
     if not len(loader):
         raise SystemExit("LEAD SceneLoader returned no camera-anchored scenes for the requested log list")
 
-    phase_counts = defaultdict(int)
     written = skipped = 0
-    with ExternalCacheWriter(args.cache_root, "lead", args.split) as writer:
+    with ExternalCacheWriter(args.cache_root, "lead", args.split,
+                             sample_interval_us=TARGET_INTERVAL_US, target_horizon=HORIZON) as writer:
         for index in range(len(loader)):
             if args.max_samples and written >= args.max_samples:
                 break
             try:
                 scene_data = loader[index]  # normal view only; all camera inputs are 4Hz anchor frames
                 log_name = str(scene_data.log_metadata.log_name)
-                phase = phase_counts[log_name] % 2
-                phase_counts[log_name] += 1
                 future = loader.read_future_ego_states(index, future_ticks)
                 label_origin_pose = exact_label_origin(scene_data)
                 features, targets, assets = lead_sample(scene_data, future, log_name,
-                                                        label_origin_pose=label_origin_pose, phase=phase)
+                                                        label_origin_pose=label_origin_pose)
                 token = f"{log_name}:{int(scene_data.cameras[0].timestamp.time_us)}"
                 writer.write_sample(token, features, targets, assets)
                 written += 1

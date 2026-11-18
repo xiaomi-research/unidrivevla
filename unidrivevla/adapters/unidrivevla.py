@@ -45,6 +45,7 @@ class Profile:
     delta_mean: List[float]
     delta_std: List[float]
     frame: str = "ego"
+    pose_interval: float = 0.5  # seconds between planned poses; LEAD release is 4 Hz (0.25)
     image_hw: List[int] = field(default_factory=lambda: [544, 960])
     motion_steps: int = 12
     train_precision: str = "native"  # parameter construction dtype recipe; metadata only in the profile adapter
@@ -74,6 +75,7 @@ class Profile:
     use_occ_tokens: bool = True  # the 625 occupancy queries (Bench2Drive's perception stream has none)
     keypoint_from_anchor: bool = False  # Bench2Drive's deformable block feeds the anchor embed to learnable points
     box_size_clamp: Optional[List[float]] = None  # log-size clamp; null: nuScenes [-0.5, 3.5], Bench2Drive [-5, 5]
+    hf_attn_impl: str = "flash_attention_2"  # preserve historical Qwen3-VL HF vision/AR behavior for old profiles
     inference_attn_impl: str = "sdpa"
     cast_inference_mask: bool = True  # false: Bench2Drive leaves the inference mask in fp32
     detach_plan_geometry: bool = False  # Bench2Drive detaches the trajectory before the collision / map losses
@@ -429,7 +431,18 @@ def deformable(num_cams: int, keypoints: dict, keypoint_from_anchor: bool = Fals
 
 def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_vlm: bool, with_motion: bool,
                 attn_implementation: str = "flex", gradient_checkpointing: bool = True,
-                cache_frozen_prefix: bool = False) -> dict:
+                cache_frozen_prefix: bool = False, *, vlm_variant: str = "2b",
+                visual_lora=None, visual_wasp=None, llm_wasp=None, visual_projector_wasp=None,
+                canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
+                coc_jsonl_path: Optional[str] = None, coc_language_loss_weight: Optional[float] = None,
+                coc_planning_loss_weight: float = 0.0) -> dict:
+    if coc_planning_loss_weight:
+        raise ValueError("coc_planning_loss_weight must be 0; the release recipes add no CoC planning loss")
+    if canbus_sft_prompt and len(profile.status_layout) < 10:
+        raise ValueError(
+            f"canbus_sft_prompt requires all 10 ego-status fields; profile {profile.name!r} "
+            f"provides {len(profile.status_layout)}"
+        )
     embed_dims, groups, drop, num_decoder, num_single = 256, 8, 0.1, 6, 1
     single = ["concat", "gnn", "inter_gnn", "norm", "split", "deformable", "concat", "ffn", "norm", "split", "refine"]
     temporal = ["concat", "temp_gnn", "gnn", "inter_gnn", "norm", "split", "deformable", "concat", "ffn", "norm", "split", "refine"]
@@ -533,7 +546,9 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         num_classes=profile.occ_classes or 9, expansion=8, vqvae_cfg=None,
     )
     return dict(
-        pretrained_path=vlm_path, action_dim=2, action_horizon=profile.horizon, dtype="bfloat16", train_vlm=train_vlm,
+        pretrained_path=vlm_path, action_dim=2, action_horizon=profile.horizon,
+        pose_interval=profile.pose_interval, hf_attn_impl=profile.hf_attn_impl,
+        dtype="bfloat16", train_vlm=train_vlm,
         attn_implementation=attn_implementation, inference_attn_impl=profile.inference_attn_impl,
         loss_planning=dict(type="FlowPlanningLoss", use_min_snr_loss=True, min_snr_gamma=5.0, loss_weight=1.0,
                            hybrid_loss_weight=0.5, detach_window_size=3,
@@ -548,7 +563,12 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         delta_mean=tuple(profile.delta_mean), delta_std=tuple(profile.delta_std),
         coordinate_frame=profile.frame, prompt_style=profile.prompt_style,
         enable_knowledge_insulation=profile.enable_knowledge_insulation,
-        ar_loss_weight=profile.ar_loss_weight,
+        ar_loss_weight=profile.ar_loss_weight if coc_language_loss_weight is None else coc_language_loss_weight,
+        vlm_variant=vlm_variant,
+        visual_lora_cfg=visual_lora, visual_wasp_cfg=visual_wasp, peft_cfg=llm_wasp,
+        visual_projector_wasp_cfg=visual_projector_wasp,
+        canbus_sft_prompt=canbus_sft_prompt, coc_language_prompt=coc_language_prompt,
+        coc_jsonl_path=coc_jsonl_path or "",
         use_hist_traj=profile.use_hist_traj, use_occ_tokens=profile.use_occ_tokens,
         detach_plan_geometry=profile.detach_plan_geometry, summed_planning_loss=profile.summed_planning_loss,
         official_command_text=profile.official_command_text,
@@ -776,11 +796,17 @@ class UniDriveVLAPolicy(nn.Module):
                  lora: Optional[Dict] = None, with_motion: bool = False, checkpoint_path: Optional[str] = None,
                  attn_implementation: str = "flex", gradient_checkpointing: bool = True,
                  cache_frozen_prefix: bool = False, shared_runtime=None,
-                 checkpoint_frame: Optional[str] = None):
+                 checkpoint_frame: Optional[str] = None, vlm_variant: str = "2b",
+                 visual_lora: Optional[Dict] = None, visual_wasp: Optional[Dict] = None,
+                 llm_wasp: Optional[Dict] = None, visual_projector_wasp: Optional[Dict] = None,
+                 canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
+                 coc_jsonl_path: Optional[str] = None,
+                 coc_language_loss_weight: Optional[float] = None, coc_planning_loss_weight: float = 0.0):
         super().__init__()
         self.profile = profile if isinstance(profile, Profile) else Profile.from_config(profile)
-        self.trajectory_sampling = SimpleNamespace(num_poses=self.profile.horizon, interval_length=POSE_INTERVAL_S,
-                                                   time_horizon=self.profile.horizon * POSE_INTERVAL_S)
+        interval = float(self.profile.pose_interval)
+        self.trajectory_sampling = SimpleNamespace(num_poses=self.profile.horizon, interval_length=interval,
+                                                   time_horizon=self.profile.horizon * interval)
         self.lr, self.weight_decay, self.vlm_lr_mult = lr, weight_decay, vlm_lr_mult
         self.warmup_steps, self.warmup_start, self.min_lr_ratio = warmup_steps, warmup_start, min_lr_ratio
         self.checkpoint_path = checkpoint_path
@@ -789,8 +815,14 @@ class UniDriveVLAPolicy(nn.Module):
         self.checkpoint_frame = checkpoint_frame
         self.with_motion = bool(with_motion)
         head_cls = register_modules()
-        self.head = head_cls(**head_kwargs(self.profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
-                                           gradient_checkpointing, cache_frozen_prefix), lora_cfg=lora,
+        self.head = head_cls(**head_kwargs(
+            self.profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
+            gradient_checkpointing, cache_frozen_prefix, vlm_variant=vlm_variant,
+            visual_lora=visual_lora, visual_wasp=visual_wasp, llm_wasp=llm_wasp,
+            visual_projector_wasp=visual_projector_wasp, canbus_sft_prompt=canbus_sft_prompt,
+            coc_language_prompt=coc_language_prompt, coc_jsonl_path=coc_jsonl_path,
+            coc_language_loss_weight=coc_language_loss_weight,
+            coc_planning_loss_weight=coc_planning_loss_weight), lora_cfg=None if llm_wasp else lora,
                              shared_runtime=shared_runtime)
 
     def worker_transform(self, image_augment=None, train: bool = False):
@@ -893,8 +925,28 @@ class UniDriveVLAPolicy(nn.Module):
         if not self.training:
             if task != "planning":
                 raise ValueError(f"policy task {task!r} is only supported during training")
-            pred = self.head.forward_test(**{k: v for k, v in features.items()
-                                             if k not in ("task", "coordinate_frame", "native_to_ego")})
+            return_nuscenes_pr10 = features.get("return_nuscenes_pr10", False)
+            if type(return_nuscenes_pr10) is not bool:
+                raise TypeError("return_nuscenes_pr10 must be a bool")
+            if return_nuscenes_pr10:
+                if (self.profile.name != "nuscenes" or self.profile.frame != "lidar"
+                        or len(self.profile.status_layout) != 10 or self.with_motion
+                        or getattr(self.head, "with_motion", False)
+                        or getattr(self.head, "canbus_sft_prompt", False)):
+                    raise ValueError(
+                        "nuscenes_pr10 export is limited to no-ego 10D native-LiDAR nuScenes policies "
+                        "without the motion head"
+                    )
+                qwen = self.head.qwen3_vl_with_expert.qwen3_vl
+                if qwen.config.text_config.hidden_size != 2048:
+                    raise ValueError("nuscenes_pr10 export currently requires the 2B Qwen3-VL backbone")
+            head_inputs = {k: v for k, v in features.items()
+                           if k not in ("task", "coordinate_frame", "native_to_ego", "return_nuscenes_pr10")}
+            if return_nuscenes_pr10:
+                # The official 10D status score is the denoiser's prediction, never dataset GT.
+                head_inputs["use_gt_ego_status"] = False
+                head_inputs["return_nuscenes_pr10"] = True
+            pred = self.head.forward_test(**head_inputs)
             xy_head = pred["traj"].float()
             matrix = _batch_frame_rotation(features, self.profile, xy_head.shape[0], xy_head.device, xy_head.dtype)
             xyz_head = torch.cat((xy_head, torch.zeros_like(xy_head[..., :1])), dim=-1)
@@ -902,6 +954,46 @@ class UniDriveVLAPolicy(nn.Module):
             result = {"pred_traj": poses_from_xy(xy_ego)}
             if self.profile.frame == "lidar":
                 result["pred_traj_head"] = poses_from_xy(xy_head)
+            if return_nuscenes_pr10:
+                det, maps = pred.get("det"), pred.get("map")
+                status = pred.get("ego_status_pred")
+                batch_size = xy_head.shape[0]
+                if not isinstance(det, list) or len(det) != batch_size:
+                    raise RuntimeError("PR10 export requires one decoded detection result per sample")
+                if not isinstance(maps, list) or len(maps) != batch_size:
+                    raise RuntimeError("PR10 export requires one decoded map result per sample")
+                if not torch.is_tensor(status) or status.shape != (batch_size, 10):
+                    raise RuntimeError("PR10 export requires the predicted 10D ego_status_pred")
+
+                def map_tensor(value):
+                    if torch.is_tensor(value):
+                        return value
+                    array = np.asarray(value)
+                    if array.dtype == object:
+                        raise TypeError("PR10 map fields must be rectangular numeric arrays")
+                    return torch.as_tensor(np.ascontiguousarray(array))
+
+                exported = []
+                for index, (det_sample, map_sample) in enumerate(zip(det, maps)):
+                    if not isinstance(det_sample, dict) or not isinstance(map_sample, dict):
+                        raise RuntimeError("PR10 export received an invalid per-sample det/map result")
+                    missing_det = {"boxes_3d", "scores_3d", "labels_3d", "instance_ids"} - set(det_sample)
+                    missing_map = {"vectors", "scores", "labels"} - set(map_sample)
+                    if missing_det:
+                        raise RuntimeError(f"PR10 export detection fields missing: {sorted(missing_det)}")
+                    if missing_map:
+                        raise RuntimeError(f"PR10 export map fields missing: {sorted(missing_map)}")
+                    if (not torch.is_tensor(det_sample["instance_ids"])
+                            or det_sample["instance_ids"].shape[0] != det_sample["boxes_3d"].shape[0]):
+                        raise RuntimeError("PR10 export tracking IDs do not align with detections")
+                    item = {key: det_sample[key] for key in ("boxes_3d", "scores_3d", "labels_3d", "instance_ids")}
+                    if "cls_scores" in det_sample:
+                        item["cls_scores"] = det_sample["cls_scores"]
+                    item.update({key: map_tensor(map_sample[key]) for key in ("vectors", "scores", "labels")})
+                    item["final_planning"] = pred["traj"][index]
+                    item["ego_status_pred"] = status[index]
+                    exported.append(item)
+                result["nuscenes_pr10"] = exported
             det = pred.get("det")
             if det is not None and any("trajs_3d" in sample and "trajs_score" in sample for sample in det):
                 result["det"] = det
@@ -934,9 +1026,11 @@ class UniDriveVLAPolicy(nn.Module):
             batch[key] = [data[i][mask[i]] for i in range(data.shape[0])]
         batch.pop("box_mask")
         batch.pop("map_mask")
+        if tokens is not None:
+            batch["sample_tokens"] = [tokens] if isinstance(tokens, str) else list(tokens)
         losses = {k: v for k, v in self.head.forward_train(**batch)["losses"].items() if torch.is_tensor(v)}
         total = sum(torch.nan_to_num(v) for v in losses.values())
-        return SimpleNamespace(loss=total, **{k: v.detach() for k, v in losses.items() if v.numel() == 1})
+        return SimpleNamespace(loss=total, **{k: v.detach() for k, v in losses.items() if k != "loss" and v.numel() == 1})
 
     def compute_loss(self, features, targets, predictions) -> torch.Tensor:
         """Validation: mean L2 of the planned waypoints over the valid steps."""
