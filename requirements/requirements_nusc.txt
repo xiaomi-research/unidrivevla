@@ -1,7 +1,6 @@
 google-cloud-bigquery
 opencv-python==4.8.0.76
 einops==0.8.1
-numpy==1.22.4
 casadi==3.6.7
 pytorch-lightning==1.2.5
 ipython==8.12.3
@@ -13,8 +12,9 @@ networkx==2.5
 mmdet==2.26.0
 mmsegmentation==0.29.1
 pyquaternion
-nuscenes-devkit
+nuscenes-devkit==1.1.10
 prettytable
 shapely==1.8.5
 timm
 numpy==1.23.4
+qwen-vl-utils==0.0.14

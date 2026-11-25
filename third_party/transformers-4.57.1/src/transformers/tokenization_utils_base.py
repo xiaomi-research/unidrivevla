@@ -1802,12 +1802,12 @@ class PreTrainedTokenizerBase(SpecialTokensMixin, PushToHubMixin):
             template_dict = self.chat_template
             if chat_template is not None and chat_template in template_dict:
                 # The user can pass the name of a template to the chat template argument instead of an entire template
-                chat_template = template_Dict[chat_template]
+                chat_template = template_dict[chat_template]
             elif chat_template is None:
                 if tools is not None and "tool_use" in template_dict:
-                    chat_template = template_Dict["tool_use"]
+                    chat_template = template_dict["tool_use"]
                 elif "default" in template_dict:
-                    chat_template = template_Dict["default"]
+                    chat_template = template_dict["default"]
                 else:
                     raise ValueError(
                         "This model has multiple chat templates with no default specified! Please either pass a chat "

@@ -1,190 +1,83 @@
 # Installation
 
-
-## Common Setup
-
-### 1. Clone the Repository
+The commands below are for Linux. Use a CUDA toolkit and driver compatible with the PyTorch wheels when building the CUDA extensions. The examples use CUDA 12.1 (`cu121`). See the [PyTorch version matrix](https://pytorch.org/get-started/previous-versions/) for the other available CUDA builds.
 
 ```bash
 git clone https://github.com/xiaomi-research/unidrivevla.git
 cd unidrivevla
 ```
 
-### 2. Create a Conda Environment
+## Training and nuScenes evaluation
 
-> **Python version note:**
-> - nuScenes training/evaluation and Bench2Drive training support **Python 3.9+**
-> - Bench2Drive closed-loop evaluation (CARLA 0.9.15) requires **Python 3.8**
->
-> We recommend using two separate environments: Python 3.9 for training and Python 3.8 for Bench2Drive evaluation. Alternatively, you can use Python 3.8 throughout if you only need one environment.
+Use Python 3.9 and PyTorch 2.5.1 for the training recipes with FlexAttention.
 
-**Training environment (recommended):**
 ```bash
 conda create -n unidrivevla python=3.9
 conda activate unidrivevla
+python -m pip install wheel ninja packaging
+python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+
+# Choose the requirements for the benchmark in this environment.
+python -m pip install -r requirements/requirements_nusc.txt
+# For Bench2Drive training, use requirements/requirements_b2d.txt instead.
+
+python -m pip install deepspeed==0.14.4 peft==0.13.2 transformers==4.57.1
+python -m pip install flash-attn==2.7.4.post1 --no-build-isolation
+TRANSFORMERS_DIR=$(python -c 'from pathlib import Path; import transformers; print(Path(transformers.__file__).parent)')
+cp -R qwenvl3/transformers_replace/models/. "$TRANSFORMERS_DIR/models/"
 ```
 
-**Evaluation environment (for Bench2Drive closed-loop only):**
-```bash
-conda create -n unidrivevla_eval python=3.8
-conda activate unidrivevla_eval
-```
+Continue with [building the extensions](#build-the-extensions).
 
-### 3. Install PyTorch
+## Bench2Drive closed-loop evaluation
 
-First, detect your CUDA version:
-
-```bash
-CUDA_VERSION=$(nvcc -V | grep -oP 'release \K[\d.]+' | cut -d. -f1-2 | tr -d '.')
-CUDA_SUFFIX="cu${CUDA_VERSION:0:2}${CUDA_VERSION:2:2}"
-echo "Detected CUDA: ${CUDA_SUFFIX}"
-```
-
-Then install PyTorch with the matching CUDA suffix:
-
-```bash
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/${CUDA_SUFFIX}
-```
-
-For example, CUDA 12.1 → `cu121`, CUDA 11.8 → `cu118`.
-
-
-### 4. Install Transformers
-
-```bash
-pip install transformers==4.57.1
-```
-
-Then replace the model files with our modified version for Qwen3-VL support:
-
-```bash
-CONDA_PREFIX=/path/to/anaconda3/ or /path/to/anaconda3/envs/env_name/
-TRANSFORMERS_DIR=${CONDA_PREFIX}/lib/python3.9/site-packages/transformers/
-cp -r qwenvl3/transformers_replace/models ${TRANSFORMERS_DIR}
-```
-
-### 6. Install MMCV (from third-party)
-
-We provide a modified version of MMCV adapted for DeepSpeed. Build it from source:
-
-```bash
-cd third_party/mmcv-1.7.2
-export MMCV_WITH_OPS=1
-export FORCE_CUDA=1
-export MMCV_NO_Compiler_CHECK=1
-pip install -r requirements.txt
-python setup.py build_ext --inplace
-pip install -e . --no-build-isolation
-cd ../..
-```
-
-### 7. Install MMDetection3D (from third-party)
-
-```bash
-cd third_party/mmdetection3d-1.0.0rc6
-pip install -e . --no-build-isolation
-cd ../..
-```
-
-### 8. Install Training Dependencies
-
-```bash
-pip install deepspeed==0.14.4
-pip install peft
-pip install timm
-pip install qwen_vl_utils
-```
-
-
-### 9. Install Flash Attn
-
-```bash
-pip install flash-attn --no-build-isolation
-```
-
-If the installation fails, it is recommended to download the prebuilt .whl package from the official FlashAttention repository and install it manually.
-
----
-
-## nuScenes
-
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements/requirements_nusc.txt
-```
-
-### 2. Build Custom Ops
-
-```bash
-cd nuScenes/projects/mmdet3d_plugin/ops
-pip install -e . --no-build-isolation
-cd ../../../..
-```
-
----
-
-## Bench2Drive
-
-> **Note:** Training uses Python 3.9+. Closed-loop evaluation with CARLA 0.9.15 requires a **separate Python 3.8 environment**.
-
-### 1. Install Training Dependencies (Python 3.9+)
-
-```bash
-pip install -r requirements/requirements_b2d.txt
-```
-
-### 2. Create Evaluation Environment (Python 3.8)
-
-CARLA 0.9.15 requires Python 3.8. Create a separate conda environment for evaluation:
+Use a separate Python 3.8 environment for the CARLA 0.9.15 evaluation. The CUDA 12.1 index provides Python 3.8 wheels for PyTorch 2.4.1 and torchvision 0.19.1.
 
 ```bash
 conda create -n unidrivevla_eval python=3.8
 conda activate unidrivevla_eval
-pip install -r requirements/requirements_b2d.txt
+python -m pip install wheel ninja packaging
+python -m pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+python -m pip install -r requirements/requirements_b2d.txt
+python -m pip install deepspeed==0.14.4 peft==0.13.2
+python -m pip install flash-attn==2.7.0.post2 --no-build-isolation
+python -m pip install -e third_party/transformers-4.57.1 --no-build-isolation
+python -m pip install carla==0.9.15
 ```
 
-Install MMCV and MMDetection3D from third-party:
+The [vendored Transformers](../third_party/transformers-4.57.1) includes the Python 3.8 changes and the Qwen3-VL visual return values used by UniDriveVLA. The training environment gets the corresponding [Qwen3-VL model files](../qwenvl3/transformers_replace/models) from the copy step above.
+
+Continue with [building the extensions](#build-the-extensions) for Bench2Drive, then install the CARLA simulator and maps. Run these commands from the repository root.
 
 ```bash
-cd third_party/mmcv-1.7.2
-export MMCV_WITH_OPS=1
-export FORCE_CUDA=1
-export MMCV_NO_Compiler_CHECK=1
-pip install -r requirements.txt
-python setup.py build_ext --inplace
-pip install -e .
-cd ../..
-
-cd third_party/mmdetection3d-1.0.0rc6
-pip install -e .
-cd ../..
-```
-
-Install our modified transformers (adapted for Python 3.8) from third-party:
-
-```bash
-cd third_party/transformers-4.57.1
-pip install -e .
-cd ../..
-```
-
-### 3. Install CARLA 0.9.15
-
-```bash
-mkdir -p carla && cd carla
+mkdir -p Bench2Drive/carla
+cd Bench2Drive/carla
 wget https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/CARLA_0.9.15.tar.gz
 wget https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/AdditionalMaps_0.9.15.tar.gz
-
-tar -xvf CARLA_0.9.15.tar.gz
-cd Import && tar -xvf ../AdditionalMaps_0.9.15.tar.gz
-cd .. && bash ImportAssets.sh
+tar -xf CARLA_0.9.15.tar.gz
+mkdir -p Import
+tar -xf AdditionalMaps_0.9.15.tar.gz -C Import
+bash ImportAssets.sh
+export CARLA_ROOT="$PWD"
+python -c 'import carla; print(carla.__file__)'
+cd ../..
 ```
 
-Add CARLA to your Python path:
+## Build the extensions
+
+Run this section in the environment for your benchmark, from the repository root. The benchmark requirements pin MMDetection, MMSegmentation, Shapely 1.8.5 and the Qwen VL utilities. Build the OpenMMLab packages and deformable attention ops after installing those requirements.
 
 ```bash
-export CARLA_ROOT=/path/to/unidrivevla/carla
-echo "$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg" >> $CONDA_PREFIX/lib/python3.9/site-packages/carla.pth
+MMCV_WITH_OPS=1 FORCE_CUDA=1 MMCV_NO_Compiler_CHECK=1 \
+    python -m pip install -e third_party/mmcv-1.7.2 --no-build-isolation
+python -m pip install -e third_party/mmdetection3d-1.0.0rc6 --no-build-isolation
+
+# For nuScenes:
+python -m pip install -e nuScenes/projects/mmdet3d_plugin/ops --no-build-isolation
+# For Bench2Drive, use Bench2Drive/projects/mmdet3d_plugin/ops instead.
+
+python -m pip check
+python -c 'import torch, mmcv, mmdet, mmdet3d, mmseg, shapely, transformers; import flash_attn, qwen_vl_utils; print(torch.__version__, torch.version.cuda, transformers.__file__)'
 ```
 
+The released nuScenes configs register `QwenVL3APlanningHead` from the [active dense heads](../nuScenes/projects/mmdet3d_plugin/unidrivevla/dense_heads). `shared-weight_decoder/` holds an experimental implementation with a different model layout. You can use the released configs and checkpoints directly.

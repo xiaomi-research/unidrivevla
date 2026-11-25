@@ -149,3 +149,32 @@ Checkpoints are saved to `${SAVE_DIR}/` in Megatron format. The resulting checkp
 - **Dataset Mixture:** The 2B model uses 12 driving datasets + FineVision. The 8B model additionally includes DriveLM.
 - **Hyperparameters:** See the shell scripts for detailed training arguments (lr=4e-5, 3 epochs, global_batch_size=128).
 - **Resuming:** Training automatically resumes from the latest checkpoint if interrupted.
+
+## Stage 1 co-training manifests
+
+The nuScenes co-training configs refer to four local exports under `DRIVING_JSONL_ROOT`. The public releases provide the source QA data. Recreating the exact training mixture requires the original exported splits, including the FineVision 90K sample selection.
+
+| Config filename | Public source for a local manifest |
+| --- | --- |
+| `qa_dataset_lingoqa_clean_packed2048.jsonl` | [LingoQA](https://huggingface.co/datasets/owl10/ReCogDrive_Pretraining/blob/main/LingoQA/dataset_lingoqa.jsonl) |
+| `drivelm_converted.with_prefix_packed2048.jsonl` | [DriveLM](https://huggingface.co/datasets/owl10/ReCogDrive_Pretraining/tree/main/DriveLM) |
+| `senna_final_reordered_updated_token_fixed_packed2048.jsonl` | [Senna](https://huggingface.co/datasets/owl10/ReCogDrive_Pretraining/blob/main/Senna/dataset_senna.jsonl) |
+| `finevision_subset_90k.jsonl` | [FineVision](https://huggingface.co/spaces/HuggingFaceM4/FineVision) |
+
+For a local mixture, write one JSON object per line. Use `image` for the downloaded image paths and `conversations` for the text turns. Update source image paths to point to your local data.
+
+```json
+{"image":["/datasets/example.jpg"],"conversations":[{"from":"human","value":"<image>\nWhat is ahead?"},{"from":"gpt","value":"A car is ahead."}]}
+```
+
+The [co-training loader](../nuScenes/projects/mmdet3d_plugin/datasets/ar_planning_qa_dataset.py) tokenizes these rows and enforces the configured 2,048-token limit. Supply the prepared manifests directly with `--cfg-options`. Run this example from `nuScenes/`.
+
+```bash
+bash tools/dist_train.sh \
+    projects/configs/UniDriveVLA/unidrivevla_stage1_2b_cotraining.py \
+    8 stage1_local_qa --cfg-options \
+    'ar_dataset_cfg.jsonl_paths=[/data/lingoqa.jsonl,/data/drivelm.jsonl,/data/senna.jsonl]' \
+    'ar_dataset_cfg.vqa_jsonl_paths=[/data/finevision.jsonl]'
+```
+
+The [Stage 1 recipe without co-training](train_eval_nuscenes.md#stage-1) uses the driving annotations only. The checkpoint table in the [README](../README.md#checkpoints) lists the released weights.

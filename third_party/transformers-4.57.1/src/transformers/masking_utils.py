@@ -707,7 +707,8 @@ def _preprocess_mask_arguments(
             An offset to indicate at which first position the key and values states will refer to.
     """
     # If the mask is already 4D, simply return as-is (it was already prepared, or it is custom)
-    if isinstance(attention_mask, (torch.Tensor, BlockMask)) and len(attention_mask.shape) == 4:
+    mask_types = (torch.Tensor, BlockMask) if is_torch_flex_attn_available() else (torch.Tensor,)
+    if isinstance(attention_mask, mask_types) and len(attention_mask.shape) == 4:
         return True, attention_mask, None, None, None
 
     # For TGI/vLLM backends, or other custom attention without equivalent mask creation: we don't need a mask!

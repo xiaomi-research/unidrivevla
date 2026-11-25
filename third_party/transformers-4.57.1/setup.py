@@ -186,7 +186,7 @@ _deps = [
     "timeout-decorator",
     "tiktoken",
     "timm<=1.0.19,!=1.0.18",
-    #"tokenizers>=0.21.0,<=0.23.0",
+    "tokenizers>=0.20.3,<=0.23.0",
     "torch>=2.2",
     "torchaudio",
     "torchvision",
@@ -454,7 +454,7 @@ install_requires = [
     deps["pyyaml"],  # used for the model cards metadata
     deps["regex"],  # for OpenAI GPT
     deps["requests"],  # for downloading models over HTTPS
-    #deps["tokenizers"],
+    deps["tokenizers"],
     deps["safetensors"],
     deps["tqdm"],  # progress bars in model download and training scripts
 ]

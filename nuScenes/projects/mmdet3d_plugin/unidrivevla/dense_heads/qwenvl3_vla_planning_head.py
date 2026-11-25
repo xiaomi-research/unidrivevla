@@ -784,7 +784,14 @@ class QwenVL3APlanningHead(nn.Module):
                      command = torch.tensor(command)
 
             command = command.to(device)
-            cmd_idx = command.view(-1).long()
+            if command.ndim > 1 and command.shape[-1] == len(_NAV_CMD_FIXED):
+                cmd_idx = command.to(torch.float32).argmax(dim=-1).reshape(-1)
+            else:
+                cmd_idx = command.reshape(-1).long()
+            if cmd_idx.numel() != b:
+                raise ValueError(
+                    f"Expected one navigation command per sample, got shape {tuple(command.shape)} for batch {b}"
+                )
 
             idx_list = cmd_idx.tolist()
         else:

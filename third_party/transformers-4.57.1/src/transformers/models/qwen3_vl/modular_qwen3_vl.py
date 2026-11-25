@@ -14,7 +14,7 @@
 # limitations under the License.
 """PyTorch Qwen3-VL model."""
 
-from typing import Callable, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -648,8 +648,8 @@ class Qwen3VLVisionModel(Qwen3VLPreTrainedModel):
             ]
 
             for i in range(4):
-                idx_List[i].extend(indices[i].tolist())
-                weight_List[i].extend(weights[i].tolist())
+                idx_list[i].extend(indices[i].tolist())
+                weight_list[i].extend(weights[i].tolist())
 
         idx_tensor = torch.tensor(idx_list, dtype=torch.long, device=self.pos_embed.weight.device)
         weight_tensor = torch.tensor(
@@ -708,6 +708,7 @@ class Qwen3VLVisionModel(Qwen3VLPreTrainedModel):
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
 
         deepstack_feature_lists = []
+        raw_feature_list = []
         for layer_num, blk in enumerate(self.blocks):
             hidden_states = blk(
                 hidden_states,
@@ -716,14 +717,16 @@ class Qwen3VLVisionModel(Qwen3VLPreTrainedModel):
                 **kwargs,
             )
             if layer_num in self.deepstack_visual_indexes:
-                deepstack_feature = self.deepstack_merger_List[self.deepstack_visual_indexes.index(layer_num)](
+                deepstack_feature = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_num)](
                     hidden_states
                 )
                 deepstack_feature_lists.append(deepstack_feature)
+                raw_feature_list.append(hidden_states)
 
+        raw_feature_list.append(hidden_states)
         hidden_states = self.merger(hidden_states)
 
-        return hidden_states, deepstack_feature_lists
+        return hidden_states, deepstack_feature_lists, raw_feature_list
 
 
 @auto_docstring(
@@ -933,7 +936,7 @@ class Qwen3VLModel(Qwen2_5_VLModel):
                     )
                     text_len = ed - st
 
-                    st_idx = llm_pos_ids_List[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
                     llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
 
                     # t_index is always 0 because llm_grid_t is always 1 (we use timestamps to encode the temporal information for videos)
@@ -944,7 +947,7 @@ class Qwen3VLModel(Qwen2_5_VLModel):
                     st = ed + llm_grid_t * llm_grid_h * llm_grid_w
 
                 if st < len(input_tokens):
-                    st_idx = llm_pos_ids_List[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
                     text_len = len(input_tokens) - st
                     llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
 
@@ -985,10 +988,10 @@ class Qwen3VLModel(Qwen2_5_VLModel):
                 The temporal, height and width of feature shape of each image in LLM.
         """
         pixel_values = pixel_values.type(self.visual.dtype)
-        image_embeds, deepstack_image_embeds = self.visual(pixel_values, grid_thw=image_grid_thw)
+        image_embeds, deepstack_image_embeds, raw_feature_list = self.visual(pixel_values, grid_thw=image_grid_thw)
         split_sizes = (image_grid_thw.prod(-1) // self.visual.spatial_merge_size**2).tolist()
         image_embeds = torch.split(image_embeds, split_sizes)
-        return image_embeds, deepstack_image_embeds
+        return image_embeds, deepstack_image_embeds, raw_feature_list
 
     def get_video_features(
         self, pixel_values_videos: "torch.FloatTensor", video_grid_thw: Optional["torch.LongTensor"] = None
@@ -1037,7 +1040,7 @@ class Qwen3VLModel(Qwen2_5_VLModel):
         video_mask = None
 
         if pixel_values is not None:
-            image_embeds, deepstack_image_embeds = self.get_image_features(pixel_values, image_grid_thw)
+            image_embeds, deepstack_image_embeds, _ = self.get_image_features(pixel_values, image_grid_thw)
             image_embeds = torch.cat(image_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             image_mask, _ = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
@@ -1045,7 +1048,7 @@ class Qwen3VLModel(Qwen2_5_VLModel):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
         if pixel_values_videos is not None:
-            video_embeds, deepstack_video_embeds = self.get_video_features(pixel_values_videos, video_grid_thw)
+            video_embeds, deepstack_video_embeds, _ = self.get_video_features(pixel_values_videos, video_grid_thw)
             video_embeds = torch.cat(video_embeds, dim=0).to(inputs_embeds.device, inputs_embeds.dtype)
             _, video_mask = self.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds

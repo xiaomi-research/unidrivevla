@@ -20,39 +20,44 @@ bash tools/dist_train.sh projects/configs/unidrivevla_b2d_stage2_unified_2b.py 8
 
 ## Closed-Loop Evaluation
 
+Set up the [Python 3.8 CARLA environment](installation.md#bench2drive-closed-loop-evaluation) and prepare the anchors from the [Bench2Drive data guide](data_preparation.md#bench2drive).
+
 ### 1. Create Multi-Route Splits
 
 ```bash
+cd Bench2Drive
 python ./bench2drive/tools/split_xml.py
 ```
 
 ### 2. Configure Paths
 
-Set `WORK_DIR` and `CARLA_ROOT` in the evaluation script:
+Set `CARLA_ROOT` to the simulator directory containing `CarlaUE4.sh` if you installed it outside `Bench2Drive/carla`.
 
 ```bash
-# bench2drive/leaderboard/scripts/run_evaluation.sh
-export WORK_DIR=/path/to/unidrivevla/Bench2Drive
-export CARLA_ROOT=/path/to/unidrivevla/Bench2Drive/carla
+export CARLA_ROOT=/path/to/carla_0.9.15
 ```
+
+The launcher finds the [bundled evaluator](../Bench2Drive/bench2drive/leaderboard/leaderboard/leaderboard_evaluator.py) from its own location. The second `leaderboard` in the path is the Python package.
 
 ### 3. Run Evaluation
 
-Before running, set the following variables in `bench2drive/leaderboard/scripts/run_evaluation_multi_unidrivevla.sh`, or pass them as environment variables:
+Pass the checkpoint and any path overrides as environment variables.
 
 | Variable | Description |
 |----------|-------------|
-| `WORK_DIR` | Absolute path to the `Bench2Drive/` directory |
+| `WORK_DIR` | Optional absolute path to the `Bench2Drive/` directory |
+| `VLM_PRETRAINED_PATH` | Local path to the [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) model used to build the policy |
 | `CHECKPOINT` | Path to the model weights (`.pt` file) |
 | `SAVE_PATH` | Output directory for evaluation results (default: `evaluation/unidrivevla_b2d`) |
 
 ```bash
-cd Bench2Drive
-WORK_DIR=/path/to/unidrivevla/Bench2Drive \
-CHECKPOINT=/path/to/UniDriveVLA_Stage2_Bench2Drive_2B.pt \
+VLM_PRETRAINED_PATH=/path/to/Qwen3-VL-2B-Instruct \
+CHECKPOINT=/path/to/UniDriveVLA_Stage3_Bench2drive_2B.pt \
 SAVE_PATH=evaluation/unidrivevla_b2d \
 bash bench2drive/leaderboard/scripts/run_evaluation_multi_unidrivevla.sh
 ```
+
+The default launcher uses eight GPUs and the eight splits from step 1. It reports failed workers and keeps a log for each split under `SAVE_PATH`.
 
 ### 4. Compute Metrics
 

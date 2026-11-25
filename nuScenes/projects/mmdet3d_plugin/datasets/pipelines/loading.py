@@ -12,16 +12,20 @@ class LoadAnnotations3D_E2E(object):
     Args:
         with_hist_traj (bool, optional): Whether to load historical trajectory.
             Defaults to False.
+        require_hist_traj (bool, optional): Fail if VAD history is missing or invalid.
+            Defaults to False.
     """
     def __init__(self,
                  with_hist_traj=False,
                  hist_steps=4,
                  use_cumsum=True,
+                 require_hist_traj=False,
                  **kwargs):
         super().__init__(**kwargs)
         self.with_hist_traj = with_hist_traj
         self.hist_steps = hist_steps
         self.use_cumsum = use_cumsum
+        self.require_hist_traj = require_hist_traj
 
     def _load_hist_traj(self, results):
         """Private function to load historical trajectory.
@@ -37,9 +41,17 @@ class LoadAnnotations3D_E2E(object):
         if ego_his_trajs is None and 'ann_info' in results:
             ego_his_trajs = results['ann_info'].get('gt_ego_his_trajs')
 
-        if ego_his_trajs is not None:
-            ego_his_np = np.asarray(ego_his_trajs, dtype=np.float32)
+        ego_his_np = None if ego_his_trajs is None else np.asarray(ego_his_trajs, dtype=np.float32)
+        if self.require_hist_traj and (
+            ego_his_np is None or ego_his_np.ndim != 2 or ego_his_np.shape[1] != 2
+            or not ego_his_np.size or not np.isfinite(ego_his_np).all()
+        ):
+            raise ValueError(
+                f"Missing or invalid gt_ego_his_trajs for nuScenes sample {results.get('sample_idx')}. "
+                "Prepare the matching VAD temporal infos as described in docs/data_preparation.md."
+            )
 
+        if ego_his_np is not None:
             Th = min(self.hist_steps, ego_his_np.shape[0])
             ego_his_np = ego_his_np[:Th]
 
@@ -253,9 +265,10 @@ class LoadPointsFromFile(object):
 
 @PIPELINES.register_module()
 class LoadOccWorldLabels(object):
-    def __init__(self, data_root, input_dataset='gts'):
+    def __init__(self, data_root, input_dataset='gts', required=False):
         self.data_root = data_root
         self.input_dataset = input_dataset
+        self.required = required
 
     def __call__(self, results):
         token = results['sample_idx']
@@ -264,17 +277,21 @@ class LoadOccWorldLabels(object):
         # Path format: data/nuscenes/gts/{scene_name}/{token}/labels.npz
         label_file = os.path.join(self.data_root, self.input_dataset, scene_name, token, 'labels.npz')
 
-        if os.path.exists(label_file):
+        if os.path.isfile(label_file):
             try:
-                label = np.load(label_file)
-                # OccWorld stores semantics in 'semantics' key
-                occ = label['semantics']
-                results['gt_occ_dense'] = occ
+                with np.load(label_file, allow_pickle=False) as label:
+                    results['gt_occ_dense'] = label['semantics']
             except Exception as e:
+                if self.required:
+                    raise ValueError(f"Invalid Occ3D semantics for nuScenes sample {token}: {label_file}") from e
                 print(f"Error loading OccWorld label for {token}: {e}")
                 results['gt_occ_dense'] = None
         else:
-            # print(f"Warning: OccWorld label not found for {token} at {label_file}")
+            if self.required:
+                raise FileNotFoundError(
+                    f"Missing Occ3D semantics for nuScenes sample {token}: {label_file}. "
+                    "See docs/data_preparation.md for the expected layout."
+                )
             results['gt_occ_dense'] = None
 
         return results

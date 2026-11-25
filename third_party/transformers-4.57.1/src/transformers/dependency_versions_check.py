@@ -30,7 +30,7 @@ pkgs_to_check_at_runtime = [
     "packaging",
     "filelock",
     "numpy",
-    # "tokenizers",
+    "tokenizers",
     "huggingface-hub",
     "safetensors",
     "accelerate",

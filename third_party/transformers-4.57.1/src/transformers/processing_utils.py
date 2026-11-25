@@ -1115,7 +1115,7 @@ class ProcessorMixin(PushToHubMixin):
         else:
             logger.info(f"loading configuration file {processor_file} from cache at {resolved_processor_file}")
 
-        if "chat_template" in processor_dict and processor_Dict["chat_template"] is not None:
+        if "chat_template" in processor_dict and processor_dict["chat_template"] is not None:
             logger.warning_once(
                 "Chat templates should be in a 'chat_template.jinja' file but found key='chat_template' "
                 "in the processor's config. Make sure to move your template to its own file."
@@ -1132,11 +1132,11 @@ class ProcessorMixin(PushToHubMixin):
                 audio_tokenizer_dict = reader.read()
                 audio_tokenizer_dict = json.loads(audio_tokenizer_dict)
             else:
-                audio_tokenizer_dict = processor_Dict["audio_tokenizer"]
+                audio_tokenizer_dict = processor_dict["audio_tokenizer"]
 
-            audio_tokenizer_class = cls.get_possibly_dynamic_module(audio_tokenizer_Dict["audio_tokenizer_class"])
-            audio_tokenizer_path = audio_tokenizer_Dict["audio_tokenizer_name_or_path"]
-            processor_Dict["audio_tokenizer"] = audio_tokenizer_class.from_pretrained(
+            audio_tokenizer_class = cls.get_possibly_dynamic_module(audio_tokenizer_dict["audio_tokenizer_class"])
+            audio_tokenizer_path = audio_tokenizer_dict["audio_tokenizer_name_or_path"]
+            processor_dict["audio_tokenizer"] = audio_tokenizer_class.from_pretrained(
                 audio_tokenizer_path, **audio_tokenizer_kwargs
             )
 
@@ -1169,10 +1169,10 @@ class ProcessorMixin(PushToHubMixin):
         # We have to pop up some unused (but specific) kwargs and then validate that it doesn't contain unused kwargs
         # If we don't pop, some specific kwargs will raise a warning
         if "processor_class" in processor_dict:
-            del processor_Dict["processor_class"]
+            del processor_dict["processor_class"]
 
         if "auto_map" in processor_dict:
-            del processor_Dict["auto_map"]
+            del processor_dict["auto_map"]
 
         # override processor_dict with given kwargs
         processor_dict.update(kwargs)

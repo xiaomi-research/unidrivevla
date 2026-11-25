@@ -28,4 +28,5 @@ mmsegmentation==0.29.1
 shapely==1.8.5
 timm
 numpy==1.23.4
+qwen-vl-utils==0.0.14
 

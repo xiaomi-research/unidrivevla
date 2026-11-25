@@ -230,7 +230,7 @@ class Qwen3VLSingleDecoderModel(nn.Module):
             pix = inputs["pixel_values"].to(self.qwen3_vl.device, self.qwen3_vl.dtype)
             grid = inputs["image_grid_thw"].to(self.qwen3_vl.device)
 
-            embs_list, _ = self.qwen3_vl.visual(
+            embs_list, *_ = self.qwen3_vl.visual(
                 hidden_states=pix, grid_thw=grid
             )
 

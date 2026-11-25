@@ -1,10 +1,17 @@
 #!/bin/bash
+set -e
 
 # ===== User Configuration =====
-WORK_DIR=${WORK_DIR:-$(pwd)}           # root of unidrivevla/Bench2Drive, or set via env
-CHECKPOINT=${CHECKPOINT:-"/path/to/UniDriveVLA_Stage3_Bench2Drive_2B.pt"}
-SAVE_PATH=${SAVE_PATH:-"evaluation/unidrivevla_b2d"}
+export WORK_DIR="${WORK_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+CHECKPOINT=${CHECKPOINT:?Set CHECKPOINT to the released Bench2Drive checkpoint}
+SAVE_PATH=${SAVE_PATH:-evaluation/unidrivevla_b2d}
 # ==============================
+
+cd -- "$WORK_DIR"
+if [[ ! -f "$CHECKPOINT" ]]; then
+    echo "Checkpoint not found: $CHECKPOINT" >&2
+    exit 1
+fi
 
 BASE_PORT=30000
 BASE_TM_PORT=50000
@@ -31,6 +38,7 @@ echo -e "GPU_RANK_LIST: $GPU_RANK_LIST"
 echo -e "\033[36m***********************************************************************************\033[0m"
 
 length=${#TASK_LIST[@]}
+pids=()
 for ((i=0; i<$length; i++ )); do
     PORT=$((BASE_PORT + i * 200))
     TM_PORT=$((BASE_TM_PORT + i * 200))
@@ -40,7 +48,22 @@ for ((i=0; i<$length; i++ )); do
 
     echo -e "TASK_ID: $i  PORT: $PORT  GPU: $GPU_RANK"
     echo -e "\033[36m***********************************************************************************\033[0m"
-    PID_ABLATION=v19b IS_VISUALIZE=1 bash -e bench2drive/leaderboard/scripts/run_evaluation.sh $PORT $TM_PORT $IS_BENCH2DRIVE $ROUTES $TEAM_AGENT $TEAM_CONFIG $CHECKPOINT_ENDPOINT $SAVE_PATH $PLANNER_TYPE $GPU_RANK 2>&1 > ${BASE_CHECKPOINT_ENDPOINT}_${TASK_LIST[$i]}.log &
+    PID_ABLATION=v19b IS_VISUALIZE=1 bash bench2drive/leaderboard/scripts/run_evaluation.sh \
+        "$PORT" "$TM_PORT" "$IS_BENCH2DRIVE" "$ROUTES" "$TEAM_AGENT" "$TEAM_CONFIG" \
+        "$CHECKPOINT_ENDPOINT" "$SAVE_PATH" "$PLANNER_TYPE" "$GPU_RANK" \
+        > "${BASE_CHECKPOINT_ENDPOINT}_${TASK_LIST[$i]}.log" 2>&1 &
+    pids+=("$!")
     sleep 5
 done
-wait
+
+result=0
+for i in "${!pids[@]}"; do
+    if wait "${pids[$i]}"; then
+        continue
+    else
+        status=$?
+        echo "Evaluation task ${TASK_LIST[$i]} failed with exit code $status. See ${BASE_CHECKPOINT_ENDPOINT}_${TASK_LIST[$i]}.log." >&2
+        result=$status
+    fi
+done
+exit "$result"

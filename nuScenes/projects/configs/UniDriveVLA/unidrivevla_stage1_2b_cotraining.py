@@ -520,8 +520,7 @@ ar_dataset_cfg = dict(
 
 dataset_type = "NuScenes3DDataset"
 data_root = "data/nuscenes/"
-anno_root = "data/infos/"
-info_root = "data/infos/"
+anno_root = info_root = os.path.join(data_infos_root, "")
 file_client_args = dict(backend="disk")
 
 ann_file_train = info_root + "nuscenes_infos_train.pkl"
@@ -546,8 +545,8 @@ train_pipeline = [
         type="MultiScaleDepthMapGenerator",
         downsample=strides[:num_depth_layers],
     ),
-    dict(type='LoadOccWorldLabels', data_root='data/nuscenes', input_dataset='gts'),
-    dict(type='LoadAnnotations3D_E2E', with_hist_traj=True),
+    dict(type='LoadOccWorldLabels', data_root=data_root, input_dataset='gts', required=True),
+    dict(type='LoadAnnotations3D_E2E', with_hist_traj=True, require_hist_traj=True),
     dict(type="BBoxRotation"),
     dict(type="PhotoMetricDistortionMultiViewImage"),
     dict(

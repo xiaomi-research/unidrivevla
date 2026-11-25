@@ -12,9 +12,10 @@ Before training, set the following paths in the config file (or export them as e
 |---|---|
 | `VLM_PRETRAINED_PATH` | Path to the pretrained VLM weights (e.g. `UniDriveVLA_Nusc_Base_Stage1` for 2B, or `UniDriveVLA_Nusc_Large_Stage1` for 8B) |
 | `OCCWORLD_VAE_PATH` | Path to `occvae_latest.pth`, download from [Google Drive](https://drive.google.com/drive/folders/1D1HugOG7JurEqmnQo4XbW_-Ji0chEq-e) |
-| `DEEPSPEED_CONFIG` | Path to DeepSpeed config, defaults to `zero_configs/adam_zero1_bf16.json` (already provided) |
-| `DATA_INFOS_ROOT` | Path to the annotation pkl files, defaults to `data/infos` |
-| `DRIVING_JSONL_ROOT` | *(co-training only)* Directory containing driving QA jsonl files packed at `max_length=2048` (LingoQA, DriveLM, Senna) |
+| `DEEPSPEED_CONFIG` | Path to the DeepSpeed JSON. The Stage 1 configs use the corresponding file in `zero_configs/` by default. |
+| `DATA_INFOS_ROOT` | Directory for standard and VAD annotation PKLs in Stage 1, defaults to `data/infos`. |
+| `DRIVING_JSONL_ROOT` | *(co-training only)* Directory for the default [driving and general VQA manifests](vlm_pretraining.md#stage-1-co-training-manifests). |
+| `BATCH_SIZE` | Samples per GPU for 2B Stage 1 without co-training, defaults to 4. |
 | `STAGE1_CHECKPOINT` | *(Stage 2 only)* Path to the Stage 1 checkpoint `.pt` file |
 
 You can either edit the `# ===== User Configuration =====` block at the top of the config file directly, or pass variables at runtime:
@@ -29,13 +30,11 @@ export DATA_INFOS_ROOT=data/infos
 
 ### Stage 1
 
-The training script automatically determines the number of nodes and GPUs per node from the `GPUS` argument (capped at 8 per node). For multi-node training, set `MLP_WORKER_*` environment variables before launching; otherwise it falls back to single-node mode.
+The launcher uses a single node by default, with up to eight GPUs from the `GPUS` argument. For multi-node training, set the `MLP_WORKER_*` environment variables. Run the [Stage 1 data check](data_preparation.md#4-generate-info-pkl-files) before launching.
 
-Train the perception and planning experts with co-training:
+Train the perception and planning experts with the [co-training manifests](vlm_pretraining.md#stage-1-co-training-manifests).
 
 ```bash
-cd nuScenes
-
 # UniDriveVLA-Base (2B)
 bash tools/dist_train.sh \
     projects/configs/UniDriveVLA/unidrivevla_stage1_2b_cotraining.py \
@@ -60,6 +59,18 @@ bash tools/dist_train.sh \
     projects/configs/UniDriveVLA/unidrivevla_stage1_8b_no_cotraining.py \
     8 unidrivevla_stage1_8b_no_cotrain
 ```
+
+#### Smaller GPU memory budget
+
+Start with one sample per GPU and keep the recipe's BF16 and gradient checkpointing enabled. This example measures the training path on a single GPU with validation disabled.
+
+```bash
+BATCH_SIZE=1 bash tools/dist_train.sh \
+    projects/configs/UniDriveVLA/unidrivevla_stage1_2b_no_cotraining.py \
+    1 unidrivevla_stage1_2b_small --no-validate
+```
+
+Check peak GPU memory through an optimizer update. Image token counts, the trainable modules and optimizer state affect the minimum, so a single VRAM figure would depend on the run. The launcher sets `NUM_GPUS` from the topology and DeepSpeed computes the effective batch from the microbatch, GPU count and gradient accumulation. If optimizer state is the bottleneck, an advanced option is DeepSpeed optimizer offloading to CPU. The trainer supports `zero_optimization.offload_optimizer.device: "cpu"` in a separate DeepSpeed JSON passed via `DEEPSPEED_CONFIG`.
 
 > **Tip:** If compute resources are limited, reduce training epochs to 20 by adding `--cfg-options total_epochs=20` to the command.
 

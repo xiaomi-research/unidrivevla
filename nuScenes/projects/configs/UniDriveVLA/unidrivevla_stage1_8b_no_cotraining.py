@@ -4,7 +4,7 @@ import os
 # ===== User Configuration =====
 vlm_pretrained_path = os.environ.get("VLM_PRETRAINED_PATH", "/path/to/Qwen3-VL-8B-Instruct")
 occworld_vae_path = os.environ.get("OCCWORLD_VAE_PATH", "/path/to/ckpt/occvae_latest.pth")
-deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "/path/to/zero_configs/adam_zero1_bf16.json")
+deepspeed_config = os.environ.get("DEEPSPEED_CONFIG", "zero_configs/adam_zero1_bf16.json")
 data_infos_root = os.environ.get("DATA_INFOS_ROOT", "data/infos")
 num_gpus = int(os.environ.get("NUM_GPUS", 32))
 # ==============================
@@ -458,8 +458,7 @@ model = dict(
 
 dataset_type = "NuScenes3DDataset"
 data_root = "data/nuscenes/"
-anno_root = "data/infos/"
-info_root = "data/infos/"
+anno_root = info_root = os.path.join(data_infos_root, "")
 file_client_args = dict(backend="disk")
 
 ann_file_train = info_root + "nuscenes_infos_train.pkl"
@@ -484,8 +483,8 @@ train_pipeline = [
         type="MultiScaleDepthMapGenerator",
         downsample=strides[:num_depth_layers],
     ),
-    dict(type='LoadOccWorldLabels', data_root='data/nuscenes', input_dataset='gts'),
-    dict(type='LoadAnnotations3D_E2E', with_hist_traj=True),
+    dict(type='LoadOccWorldLabels', data_root=data_root, input_dataset='gts', required=True),
+    dict(type='LoadAnnotations3D_E2E', with_hist_traj=True, require_hist_traj=True),
     dict(type="BBoxRotation"),
     dict(type="PhotoMetricDistortionMultiViewImage"),
     dict(

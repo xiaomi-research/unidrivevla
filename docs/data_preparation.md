@@ -14,7 +14,7 @@ ln -s /path/to/nuscenes/* /path/to/unidrivevla/nuScenes/data/nuscenes
 
 ### 2. Download Occ3D Annotations
 
-Download the [Occ3D-nuScenes](https://drive.google.com/drive/folders/1Xarc91cNCNN3h8Vum-REbI-f0UlSf5Fc) occupancy ground truth and place it under `nuScenes/data/nuscenes/gts/`.
+Download the [Occ3D-nuScenes](https://drive.google.com/drive/folders/1Xarc91cNCNN3h8Vum-REbI-f0UlSf5Fc) occupancy ground truth. Extract it so each training sample has `nuScenes/data/nuscenes/gts/<scene_name>/<sample_token>/labels.npz` with a `semantics` array.
 
 ### 3. Download Evaluation PKLs
 
@@ -26,6 +26,16 @@ Download additional evaluation-related pkl files from [Google Drive](https://dri
 cd nuScenes
 sh scripts/create_data.sh
 ```
+
+The script generates standard and VAD temporal infos from the same nuScenes data. Stage 1 needs both `nuscenes_infos_train.pkl` and `vad_nuscenes_infos_temporal_train.pkl`. The loader joins them by sample token and obtains `gt_ego_his_trajs` from the VAD file. It loads `gt_occ_dense` separately from the Occ3D archive.
+
+Run this check from `nuScenes/` before launching Stage 1. Use locally generated or otherwise trusted PKLs.
+
+```bash
+python tools/check_stage1_data.py --infos-root "${DATA_INFOS_ROOT:-data/infos}"
+```
+
+The check counts missing or invalid histories and Occupancy archives for the whole training split. For missing labels, check that the nuScenes split, VAD infos, and Occ3D archive belong to the same dataset. Repair the data layout so all configured losses have their labels.
 
 ### 5. Generate Anchors by K-means
 

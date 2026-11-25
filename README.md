@@ -79,6 +79,8 @@ UniDriveVLA adopts a **Mixture-of-Transformers** architecture with three special
 
 ## Checkpoints
 
+The public training, evaluation and checkpoint release covers nuScenes and Bench2Drive. NAVSIM release timing is unannounced.
+
 > nuScenes Open-Loop Results (ST-P3 metrics, without ego status)
 
 | Method | Backbone | L2@1s ↓ | L2@2s ↓ | L2@3s ↓ | Avg. L2 ↓ | Col@1s ↓ | Col@2s ↓ | Col@3s ↓ | Avg. Col ↓ | Config | Weights |
