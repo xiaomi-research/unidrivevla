@@ -31,12 +31,13 @@ Continue with [building the extensions](#build-the-extensions).
 
 ## Bench2Drive closed-loop evaluation
 
-Use a separate Python 3.8 environment for the CARLA 0.9.15 evaluation. The CUDA 12.1 index provides Python 3.8 wheels for PyTorch 2.4.1 and torchvision 0.19.1.
+Use a separate Python 3.8 environment for this CARLA 0.9.15 evaluation setup. Choose a PyTorch and torchvision pair compatible with the Python and CUDA versions in your inference environment. The commands below show one compatible combination for Python 3.8 and CUDA 12.1.
 
 ```bash
 conda create -n unidrivevla_eval python=3.8
 conda activate unidrivevla_eval
 python -m pip install wheel ninja packaging
+# Example PyTorch wheels for Python 3.8 and CUDA 12.1.
 python -m pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
 python -m pip install -r requirements/requirements_b2d.txt
 python -m pip install deepspeed==0.14.4 peft==0.13.2
