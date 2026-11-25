@@ -280,7 +280,11 @@ class LoadOccWorldLabels(object):
         if os.path.isfile(label_file):
             try:
                 with np.load(label_file, allow_pickle=False) as label:
-                    results['gt_occ_dense'] = label['semantics']
+                    semantics = label['semantics']
+                    if (not isinstance(semantics, np.ndarray) or semantics.ndim != 3
+                            or not semantics.size or semantics.dtype.kind not in "biuf"):
+                        raise ValueError("semantics must be a non-empty 3D numeric array")
+                    results['gt_occ_dense'] = semantics
             except Exception as e:
                 if self.required:
                     raise ValueError(f"Invalid Occ3D semantics for nuScenes sample {token}: {label_file}") from e

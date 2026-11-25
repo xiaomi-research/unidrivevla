@@ -44,9 +44,12 @@ def check_stage1_data(dataset_root, infos_root, split):
             raise ValueError(f"Invalid nuScenes path components for sample {token}")
         label_file = dataset_root / "gts" / scene / token / "labels.npz"
         try:
-            with ZipFile(label_file) as archive:
-                archive.getinfo("semantics.npy")
-        except (OSError, BadZipFile, KeyError):
+            with ZipFile(label_file) as archive, archive.open("semantics.npy") as member:
+                semantics = np.load(member, allow_pickle=False)
+                if (not isinstance(semantics, np.ndarray) or semantics.ndim != 3
+                        or not semantics.size or semantics.dtype.kind not in "biuf"):
+                    raise ValueError("semantics must be a non-empty 3D numeric array")
+        except (OSError, EOFError, ValueError, BadZipFile, KeyError):
             failures["missing or invalid Occ3D archive"] += 1
             if failures["missing or invalid Occ3D archive"] <= 3:
                 print(f"Missing or invalid Occ3D archive: {label_file}")

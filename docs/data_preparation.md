@@ -35,7 +35,7 @@ Run this check from `nuScenes/` before launching Stage 1. Use locally generated 
 python tools/check_stage1_data.py --infos-root "${DATA_INFOS_ROOT:-data/infos}"
 ```
 
-The check counts missing or invalid histories and Occupancy archives for the whole training split. For missing labels, check that the nuScenes split, VAD infos, and Occ3D archive belong to the same dataset. Repair the data layout so all configured losses have their labels.
+The check reads the VAD histories and the `semantics` array for each sample in the training split. If histories are missing, run `sh scripts/create_data.sh` with the raw nuScenes dataset and matching CAN bus files. For missing or corrupt occupancy labels, extract the matching Occ3D-nuScenes `trainval/gts` folder under `data/nuscenes/` and replace each flagged archive with the label for the same scene and sample token. Run the check again and start Stage 1 once it exits successfully.
 
 ### 5. Generate Anchors by K-means
 
