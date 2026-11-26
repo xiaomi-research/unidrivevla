@@ -1,15 +1,18 @@
 """CPU contract check for the opt-in multi-profile model and its source-homogeneous sampler."""
 
 import tempfile
+import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 from torch import nn
 from transformers import PretrainedConfig
 
-from unidrivevla.adapters.multidomain import MultiProfilePolicy, _embedding_migration
-from unidrivevla.adapters.unidrivevla import Profile
+from unidrivevla.adapters.multidomain import MultiProfilePolicy, _build_shared_core, _embedding_migration
+from unidrivevla.adapters.unidrivevla import Profile, head_kwargs
 from unidrivevla.data.multidomain import (HomogeneousProfileBatchSampler, MultiProfileDataset,
                                            ProfileEvalBatchSampler)
 from unidrivevla.data import registry
@@ -47,6 +50,8 @@ class TinyCore(nn.Module):
         self.qwen3_vl = nn.Linear(2, 2)
         self.qwen3_perception_expert = nn.Linear(2, 2)
         self.qwen3_action_expert = nn.Linear(2, 2)
+        self.llm_wasp_calls = 0
+        self.visual_wasp_calls = 0
         self.processor = Processor()
         self.view_token_base_vocab_size = 1
         self.processor.tokenizer.add_tokens(view_tokens)
@@ -59,14 +64,23 @@ class TinyCore(nn.Module):
         self.qwen3_perception_expert.config = configs[3]
         self.qwen3_action_expert.config = configs[4]
 
+    def wasp_regularization(self):
+        self.llm_wasp_calls += 1
+        return self.qwen3_vl.weight.square().mean()
+
+    def visual_wasp_regularization(self):
+        self.visual_wasp_calls += 1
+        return self.qwen3_vl.weight.square().mean()
+
 
 class TinyHead(nn.Module):
     train_vlm = True
 
-    def __init__(self, profile, runtime, with_motion=False):
+    def __init__(self, profile, runtime, with_motion=False, options=None):
         super().__init__()
         self.profile_name = profile.name
         self.horizon = profile.horizon
+        self.options = dict(options or {})
         self.private = nn.Parameter(torch.tensor(1.0))
         self.with_motion = bool(with_motion)
         self.motion_proj_up = nn.Linear(2, 3) if with_motion else None
@@ -84,6 +98,7 @@ class TinyHead(nn.Module):
             self.unified_decoder.loss_motion_reg = nn.Linear(2, 2)
         object.__setattr__(self, "runtime", runtime)
         self.ar_calls = 0
+        self.last_sample_tokens = None
 
     def forward_ar_batch(self, _batch):
         self.ar_calls += 1
@@ -91,10 +106,15 @@ class TinyHead(nn.Module):
         return {"loss_ar": shared * self.private, "loss_vlm_raw": shared.detach()}
 
     def forward_train(self, ar_batch=None, **_kwargs):
+        self.last_sample_tokens = _kwargs.get("sample_tokens")
         loss = self.runtime.core.qwen3_vl.weight.sum() * self.private
         losses = {"loss_plan": loss}
         if ar_batch is not None:
             losses["loss_ar"] = self.forward_ar_batch(ar_batch)["loss_ar"]
+        if (self.options.get("llm_wasp") or {}).get("type") == "wasp":
+            losses["loss_wasp"] = self.runtime.core.wasp_regularization()
+        if (self.options.get("visual_wasp") or {}).get("type") == "wasp":
+            losses["loss_visual_wasp"] = self.runtime.core.visual_wasp_regularization()
         return {"losses": losses}
 
     def forward_test(self, **_kwargs):
@@ -117,14 +137,14 @@ class SequencedSamples(Samples):
         return [list(range(index, min(index + 2, self.size))) for index in range(0, self.size, 2)]
 
 
-def composed_config():
+def composed_config(stage="stage1"):
     from hydra import compose, initialize_config_dir
 
     config_dir = Path(__file__).parents[1] / "config"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir.resolve()),
                                job_name="check_multidomain"):
         cfg = compose(config_name="train", overrides=["agent=multidomain", "data=multidomain",
-                                                        "train_test_split=navtrain"])
+                                                        "train_test_split=navtrain", f"stage={stage}"])
     assert cfg.data_loader == "multidomain"
     assert set(cfg.profiles) == {"nuscenes", "b2d", "navsim"}
     assert cfg.agent._target_.endswith("MultiProfilePolicy")
@@ -134,38 +154,181 @@ def composed_config():
 
 def profile(name, tokens, horizon, cast_stream_dtype=False, processor_use_fast=None):
     return Profile(name=name, cameras=["front"] * len(tokens), view_tokens=tokens, horizon=horizon,
-                   commands=["go"], command_prompts=["GO"], status_layout=[], det_classes=["car"],
+                   commands=["go"], command_prompts=["GO"],
+                   status_layout=("acc_x", "acc_y", "acc_z", "rot_x", "rot_y", "rot_z", "vel_x", "vel_y",
+                                  "vel_z", "steer") if name == "nuscenes" else
+                   ("vel_x", "vel_y", "acc_x", "acc_y"), det_classes=["car"],
                    box_range=[-10, -10, 10, 10], map_classes=["line"], map_roi=[20, 20],
                    ego_box=[0, 0, 0, 4, 2, 1, 0], anchors_dir="unused", delta_mean=[0, 0], delta_std=[1, 1],
                    cast_stream_dtype=cast_stream_dtype, processor_use_fast=processor_use_fast)
 
 
 def policy(checkpoint=None, initial_profile=None, with_motion=False, checkpoint_with_motion=None, exact_resume=False,
-           checkpoint_frame=None):
+           checkpoint_frame=None, quarter_second_profile=False, lora=None, visual_lora=None, visual_wasp=None, llm_wasp=None,
+           visual_projector_wasp=None, canbus_sft_prompt=False, coc_language_prompt=False, coc_jsonl_path=None,
+           coc_language_loss_weight=None, coc_planning_loss_weight=0.0, head_overrides=None):
     profiles = {"nuscenes": profile("nuscenes", ["<A>", "<B>"], 6),
                 "navsim": profile("navsim", ["<B>", "<C>"], 8, cast_stream_dtype=True,
                                   processor_use_fast=False)}
+    if quarter_second_profile:
+        profiles["navsim"].pose_interval = 0.25
     core_builds = []
+    core_options = []
 
     def build_core(**kwargs):
         core_builds.append(tuple(kwargs["view_tokens"]))
+        core_options.append(kwargs)
         return TinyCore(kwargs["view_tokens"])
+
+    head_options = {}
+
+    def build_head(profile, runtime):
+        head_options[profile.name] = runtime.head_options
+        return TinyHead(profile, runtime, with_motion, runtime.head_options)
 
     model = MultiProfilePolicy(
         profiles, vlm_path="unused", train_vlm=True, with_motion=with_motion,
+        lora=lora, visual_lora=visual_lora, visual_wasp=visual_wasp, llm_wasp=llm_wasp,
+        visual_projector_wasp=visual_projector_wasp,
+        canbus_sft_prompt=canbus_sft_prompt, coc_language_prompt=coc_language_prompt,
+        coc_jsonl_path=coc_jsonl_path, coc_language_loss_weight=coc_language_loss_weight,
+        coc_planning_loss_weight=coc_planning_loss_weight, head_overrides=head_overrides,
         checkpoint_path=checkpoint, initial_profile=initial_profile,
         checkpoint_with_motion=checkpoint_with_motion,
         checkpoint_frame=checkpoint_frame,
         exact_resume=exact_resume,
         _shared_core_factory=build_core,
         _processor_factory=lambda _path, use_fast: SimpleNamespace(tokenizer=Tokenizer(), use_fast=use_fast),
-        _head_factory=lambda profile, runtime: TinyHead(profile, runtime, with_motion),
+        _head_factory=build_head,
     )
     assert len(core_builds) == 1
+    model._test_core_options = core_options[0]
+    model._test_head_options = head_options
     return model
 
 
 def main():
+    from omegaconf import OmegaConf
+
+    baseline_cfg = composed_config(stage="stage1")
+    assert baseline_cfg.profiles.nuscenes.prefix_max_len == 3740
+    assert baseline_cfg.profiles.nuscenes.official_attention_mask is True
+    assert baseline_cfg.profiles.nuscenes.official_command_text is True
+    release_cfg = composed_config(stage="nusc_2b_stage2")
+    language_lora = {"r": 64, "lora_alpha": 128, "target_modules": ["q_proj", "k_proj"]}
+    assert release_cfg.agent.coc_language_prompt is True
+    assert release_cfg.agent.head_overrides.b2d.coc_language_prompt is False
+    assert release_cfg.agent.head_overrides.navsim.coc_language_prompt is False
+    assert release_cfg.agent.head_overrides.b2d.canbus_sft_prompt is False
+    assert release_cfg.agent.head_overrides.navsim.canbus_sft_prompt is False
+    assert release_cfg.agent.visual_wasp.type == "wasp"
+    assert release_cfg.agent.llm_wasp.type == "wasp"
+    assert release_cfg.profiles.nuscenes.prefix_max_len == 3840
+    assert release_cfg.profiles.nuscenes.official_attention_mask is False
+    assert release_cfg.profiles.nuscenes.official_command_text is False
+    assert release_cfg.train.grad_clip == 1.0
+    assert release_cfg.profiles.b2d.prefix_max_len == 3670
+    assert release_cfg.profiles.b2d.official_attention_mask is True
+
+    agent_config = OmegaConf.to_container(release_cfg.agent, resolve=True)
+    effective_heads = {}
+    for name, profile_config in OmegaConf.to_container(release_cfg.profiles, resolve=True).items():
+        resolved_profile = Profile.from_config(profile_config)
+        global_head = {key: agent_config[key] for key in (
+            "canbus_sft_prompt", "coc_language_prompt", "coc_jsonl_path", "coc_language_loss_weight",
+            "coc_planning_loss_weight", "vae_path")}
+        options = {**global_head, **agent_config["head_overrides"].get(name, {})}
+        effective_heads[name] = head_kwargs(
+            resolved_profile, agent_config["vlm_path"], options["vae_path"], agent_config["train_vlm"],
+            agent_config["with_motion"], agent_config["attn_implementation"],
+            agent_config["gradient_checkpointing"], agent_config["cache_frozen_prefix"],
+            vlm_variant=agent_config["vlm_variant"], visual_lora=agent_config["visual_lora"],
+            visual_wasp=agent_config["visual_wasp"], llm_wasp=agent_config["llm_wasp"],
+            visual_projector_wasp=agent_config["visual_projector_wasp"],
+            canbus_sft_prompt=options["canbus_sft_prompt"], coc_language_prompt=options["coc_language_prompt"],
+            coc_jsonl_path=options["coc_jsonl_path"],
+            coc_language_loss_weight=options["coc_language_loss_weight"],
+            coc_planning_loss_weight=options["coc_planning_loss_weight"],
+        )
+    assert effective_heads["nuscenes"]["prefix_max_len"] == 3840
+    assert effective_heads["nuscenes"]["official_attention_mask"] is False
+    assert effective_heads["nuscenes"]["official_command_text"] is False
+    assert effective_heads["nuscenes"]["coc_language_prompt"] is True
+    for name in ("b2d", "navsim"):
+        assert effective_heads[name]["coc_language_prompt"] is False
+        assert effective_heads[name]["coc_jsonl_path"] == ""
+    assert effective_heads["b2d"]["prefix_max_len"] == 3670
+    assert effective_heads["b2d"]["official_attention_mask"] is True
+    assert effective_heads["b2d"]["official_command_text"] is True
+
+    wrapper_calls = []
+
+    class CaptureSharedWrapper:
+        def __init__(self, *args, **kwargs):
+            wrapper_calls.append((args, kwargs))
+
+    head_module_name = "unidrivevla.models.unidrivevla.dense_heads.qwenvl3_vla_planning_head"
+    wrapper_module_name = "unidrivevla.models.unidrivevla.dense_heads.unidrivevla_vlm_qwenvl3"
+    head_module = types.ModuleType(head_module_name)
+    head_module.get_qwen_config = lambda name: name
+    wrapper_module = types.ModuleType(wrapper_module_name)
+    wrapper_module.Qwen3VLWithExpertModel = CaptureSharedWrapper
+    with patch.dict(sys.modules, {head_module_name: head_module, wrapper_module_name: wrapper_module}):
+        _build_shared_core("qwen", ["<A>"], "bfloat16", False, language_lora, None, "2b",
+                           visual_lora={"type": "lora"}, visual_wasp={"type": "wasp"},
+                           llm_wasp={"type": "wasp", "rank": 8},
+                           visual_projector_wasp={"type": "wasp"})
+        _build_shared_core("qwen", ["<A>"], "bfloat16", False, language_lora, None, "2b")
+    wasp_kwargs = wrapper_calls[0][1]
+    assert wasp_kwargs["lora_cfg"] is None and wasp_kwargs["peft_cfg"] == {"type": "wasp", "rank": 8}
+    assert wasp_kwargs["visual_lora_cfg"] == {"type": "lora"}
+    assert wasp_kwargs["visual_wasp_cfg"] == {"type": "wasp"}
+    assert wasp_kwargs["visual_projector_wasp_cfg"] == {"type": "wasp"}
+    legacy_kwargs = wrapper_calls[1][1]
+    assert legacy_kwargs["lora_cfg"] == language_lora and legacy_kwargs["peft_cfg"] is None
+
+    adapters = {
+        "visual_lora": {"type": "lora", "r": 4},
+        "visual_wasp": {"type": "wasp", "rank": 4, "beta": 0.01},
+        "llm_wasp": {"type": "wasp", "rank": 4, "beta": 0.02},
+        "visual_projector_wasp": {"type": "wasp", "rank": 4, "beta": 0.03},
+    }
+    policy_with_adapters = policy(
+        lora=language_lora, **adapters, coc_language_prompt=True, coc_jsonl_path="/labels/train.jsonl",
+        coc_language_loss_weight=0.25,
+        head_overrides={"navsim": {"coc_language_prompt": False, "coc_jsonl_path": None,
+                                    "vae_path": None},
+                       "nuscenes": {"vae_path": "/vae/nuscenes.pth"}},
+    )
+    assert all(policy_with_adapters._test_core_options[key] == value for key, value in adapters.items())
+    assert policy_with_adapters._test_core_options["lora"] is None
+    assert policy_with_adapters._shared_adapter_options["llm_wasp"] == adapters["llm_wasp"]
+    assert policy_with_adapters._test_head_options["nuscenes"]["coc_language_prompt"] is True
+    assert policy_with_adapters._test_head_options["nuscenes"]["coc_language_loss_weight"] == 0.25
+    assert policy_with_adapters._test_head_options["navsim"]["coc_language_prompt"] is False
+    assert policy_with_adapters._test_head_options["navsim"]["coc_jsonl_path"] is None
+    assert policy_with_adapters.policy_for_source("nuscenes").vae_path == "/vae/nuscenes.pth"
+    assert policy_with_adapters.policy_for_source("navsim").vae_path is None
+    for bad_overrides, expected in (({"navsim": {"lr": 1e-4}}, "unsupported options"),
+                                    ({"unknown": {"vae_path": "x"}}, "unknown profile")):
+        try:
+            policy(head_overrides=bad_overrides)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid multidomain head override was accepted")
+    try:
+        policy(head_overrides={"navsim": {"canbus_sft_prompt": True}})
+    except ValueError as exc:
+        assert "requires all 10 ego-status fields" in str(exc)
+    else:
+        raise AssertionError("can-bus prompting was accepted for a profile without the full status vector")
+
+    quarter = policy(quarter_second_profile=True)
+    assert quarter.trajectory_sampling.interval_length == 0.25
+    assert quarter.policy_for_source("navsim").trajectory_sampling.time_horizon == 2.0
+    assert quarter.trajectory_sampling_for_source("navsim").interval_length == 0.25
+    assert quarter.trajectory_sampling_for_source("nuscenes").interval_length == 0.5
     model = policy().train()
     try:
         model.initialize(strict=True)
@@ -241,6 +404,26 @@ def main():
     assert model.shared_core.qwen3_vl.weight.grad is not None
     assert model.heads["nuscenes"].private.grad is not None
     assert model.heads["navsim"].private.grad is None
+    token_model = policy()
+    token_model({"profile": ["nuscenes"], "ar_batch": {}}, targets,
+                tokens=["source=nuscenes::real-token"])
+    assert token_model.heads["nuscenes"].last_sample_tokens == ["real-token"]
+    try:
+        token_model({"profile": ["nuscenes"], "ar_batch": {}}, targets,
+                    tokens=["source=navsim::wrong-source"])
+    except ValueError as exc:
+        assert "does not match selected profile" in str(exc)
+    else:
+        raise AssertionError("a source-prefixed token for another profile was accepted")
+
+    wasp_model = policy(llm_wasp=adapters["llm_wasp"], visual_wasp=adapters["visual_wasp"])
+    wasp_model({"profile": ["nuscenes"], "ar_batch": {}}, targets)
+    assert wasp_model.shared_core.llm_wasp_calls == 1
+    assert wasp_model.shared_core.visual_wasp_calls == 1
+    assert wasp_model.heads["navsim"].ar_calls == 0
+    wasp_model({"profile": ["navsim"], "ar_batch": {}}, targets)
+    assert wasp_model.shared_core.llm_wasp_calls == 2
+    assert wasp_model.shared_core.visual_wasp_calls == 2
     try:
         model({"task": "vqa", "profile": ["nuscenes", "navsim"], "ar_batch": {}})
     except ValueError as exc:
@@ -292,10 +475,16 @@ def main():
     # The new checkpoint owns one shared core and all profile heads; restore is exact.
     with tempfile.TemporaryDirectory() as tmp:
         def frame_metadata(model, with_motion):
-            return {"_target_": "unidrivevla.adapters.multidomain.MultiProfilePolicy",
-                    "profiles": {name: {"name": profile.name, "frame": profile.frame}
-                                 for name, profile in model.profiles.items()},
-                    "with_motion": bool(with_motion)}
+            return {
+                "_target_": "unidrivevla.adapters.multidomain.MultiProfilePolicy",
+                "profiles": {name: {"name": profile.name, "frame": profile.frame}
+                             for name, profile in model.profiles.items()},
+                "with_motion": bool(with_motion),
+                "lora": model._lora_options,
+                **model._shared_adapter_options,
+                **model._global_head_options,
+                "head_overrides": model._head_overrides,
+            }
 
         legacy_frames = {name: source.frame for name, source in model.profiles.items()}
         checkpoint = Path(tmp) / "multi.ckpt"
@@ -306,6 +495,12 @@ def main():
         restored.initialize(strict=True)
         for key, value in stage1_state.items():
             assert torch.equal(value, restored.state_dict()[key]), key
+        try:
+            policy(checkpoint=checkpoint, coc_language_prompt=True).initialize(strict=True)
+        except ValueError as exc:
+            assert "option 'coc_language_prompt'" in str(exc)
+        else:
+            raise AssertionError("strict load accepted profile behavior that differs from checkpoint metadata")
 
         stage2 = policy(checkpoint=checkpoint, with_motion=True)
         fresh_motion = {key: value.clone() for key, value in stage2.state_dict().items()
@@ -425,18 +620,27 @@ def main():
     assert torch.equal(migrated[4], target[4])
 
     # Compose the real Hydra configs, then exercise the registered loader with tiny source factories.
-    cfg = composed_config()
+    cfg = release_cfg
+    cfg.agent.vae_path = "/global/nuscenes-only.vae"
     names = ("nuscenes", "b2d", "navsim")
     previous = {key: LOADERS.get(key) for key in names}
     previous_transform = registry.build_worker_transform
     received_augments = {}
+    received_vae_paths = {}
     for source_id, name in enumerate(names):
-        LOADERS[name] = lambda source_cfg, agent, _split, source_id=source_id, name=name: (
-            Samples(source_id * 10, 4) if agent.profile.name == name and source_cfg.profile.name == name else None)
+        def load_source(source_cfg, agent, _split, source_id=source_id, name=name):
+            received_vae_paths[name] = (agent.vae_path, source_cfg.agent.vae_path)
+            return Samples(source_id * 10, 4) if agent.profile.name == name and source_cfg.profile.name == name else None
+
+        LOADERS[name] = load_source
 
     class WorkerAgent:
         def policy_for_source(self, name):
-            return SimpleNamespace(name=name)
+            return SimpleNamespace(name=name, vae_path={"nuscenes": "/vae/nusc.pth", "b2d": None,
+                                                        "navsim": "/vae/navsim.pth"}[name])
+
+    class LegacyAgent:
+        pass
 
     def fake_worker_transform(agent_view, augment, train):
         received_augments[agent_view.name] = (augment, train)
@@ -454,6 +658,22 @@ def main():
         assert received_augments["nuscenes"][0].geometry.flip_p == 0.5
         assert received_augments["b2d"][0].photometric is True
         assert received_augments["navsim"][0] is None
+        assert received_vae_paths == {
+            "nuscenes": ("/vae/nusc.pth", "/vae/nusc.pth"),
+            "b2d": (None, None),
+            "navsim": ("/vae/navsim.pth", "/vae/navsim.pth"),
+        }
+        legacy_paths = {}
+        for name in names:
+            def load_legacy(source_cfg, agent, _split, name=name):
+                legacy_paths[name] = (agent.vae_path, source_cfg.agent.vae_path)
+                return Samples(0, 1)
+
+            LOADERS[name] = load_legacy
+        legacy_dataset = LOADERS["multidomain"](cfg, LegacyAgent(), "train")
+        assert legacy_paths == {name: ("/global/nuscenes-only.vae", "/global/nuscenes-only.vae")
+                                for name in names}
+        assert len(legacy_dataset) == 3
     finally:
         registry.build_worker_transform = previous_transform
         for key, loader in previous.items():

@@ -12,6 +12,18 @@ vlm_lr_mult: 0.5
 train_vlm: true
 lora: {r: 64, lora_alpha: 128, lora_dropout: 0.0, bias: none,
        target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]}
+# These adapters are installed once on the shared Qwen backbone. They are deliberately global because
+# profile-specific copies would create incompatible shared trainable weights.
+visual_lora: null
+visual_wasp: null
+llm_wasp: null
+visual_projector_wasp: null
+canbus_sft_prompt: false
+coc_language_prompt: false
+coc_jsonl_path: ${oc.env:COC_JSONL_PATH,null}
+coc_language_loss_weight: 0.1
+coc_planning_loss_weight: 0.0
+head_overrides: {}
 with_motion: false
 checkpoint_path: null
 checkpoint_frame: null  # legacy full multi-profile weights can declare a mapping of profile names to frames

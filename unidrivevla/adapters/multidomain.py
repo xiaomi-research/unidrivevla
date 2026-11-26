@@ -1,18 +1,19 @@
 """One Qwen backbone with profile-local planning heads for mixed-domain training."""
 
 import contextlib
+import copy
 import functools
 import logging
 import math
 from dataclasses import fields
 from types import SimpleNamespace
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
-from unidrivevla.adapters.unidrivevla import (POSE_INTERVAL_S, Profile, _checkpoint_motion_value,
+from unidrivevla.adapters.unidrivevla import (Profile, _checkpoint_motion_value,
                                                _check_checkpoint_frames, _motion_only_key, head_kwargs,
                                                register_modules)
 
@@ -21,6 +22,11 @@ logger = logging.getLogger(__name__)
 MULTIDOMAIN_FORMAT_KEY = "_multidomain_format_version"
 MULTIDOMAIN_MOTION_KEY = "_multidomain_with_motion"
 MULTIDOMAIN_FORMAT_VERSION = 2
+_PROFILE_HEAD_OPTIONS = frozenset({
+    "canbus_sft_prompt", "coc_language_prompt", "coc_jsonl_path", "coc_language_loss_weight",
+    "coc_planning_loss_weight", "vae_path",
+})
+_SHARED_ADAPTER_OPTIONS = ("visual_lora", "visual_wasp", "llm_wasp", "visual_projector_wasp")
 
 
 def _as_profiles(values) -> Dict[str, Profile]:
@@ -39,9 +45,11 @@ def _as_profiles(values) -> Dict[str, Profile]:
 class ProfileRuntimeView:
     """A non-module view: processor and execution flags are local, weights stay on the owning policy."""
 
-    def __init__(self, core, processor, profile: Profile, cast_stream_dtype: bool, attn_implementation: str):
+    def __init__(self, core, processor, profile: Profile, cast_stream_dtype: bool, attn_implementation: str,
+                 head_options=None):
         self.core, self.processor = core, processor
         self.profile = profile.name
+        self.head_options = copy.deepcopy(head_options or {})
         self.cast_stream_dtype = bool(cast_stream_dtype)
         self._vla_attn_impl = str(attn_implementation)
         self._inference_attn_impl = profile.inference_attn_impl
@@ -80,7 +88,18 @@ class ProfileRuntimeView:
                 cfg._attn_implementation = value
 
 
-def _build_shared_core(vlm_path, view_tokens, dtype, train_vlm, lora, processor_use_fast, vlm_variant):
+def _config_mapping(value, name):
+    if value is None:
+        return None
+    if isinstance(value, DictConfig):
+        value = OmegaConf.to_container(value, resolve=True)
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping or null")
+    return copy.deepcopy(dict(value))
+
+
+def _build_shared_core(vlm_path, view_tokens, dtype, train_vlm, lora, processor_use_fast, vlm_variant,
+                       visual_lora=None, visual_wasp=None, llm_wasp=None, visual_projector_wasp=None):
     from unidrivevla.models.unidrivevla.dense_heads.qwenvl3_vla_planning_head import get_qwen_config
     from unidrivevla.models.unidrivevla.dense_heads.unidrivevla_vlm_qwenvl3 import Qwen3VLWithExpertModel
 
@@ -91,7 +110,10 @@ def _build_shared_core(vlm_path, view_tokens, dtype, train_vlm, lora, processor_
         qwen_vlm = get_qwen_config("qwen3_vl_28l")
         expert = get_qwen_config("qwen3_28l")
     return Qwen3VLWithExpertModel(qwen_vlm, expert, expert, vlm_path, precision=dtype, train_vlm=train_vlm,
-                                  lora_cfg=lora, view_tokens=view_tokens,
+                                  lora_cfg=None if llm_wasp is not None else lora,
+                                  visual_lora_cfg=visual_lora, visual_wasp_cfg=visual_wasp,
+                                  peft_cfg=llm_wasp, visual_projector_wasp_cfg=visual_projector_wasp,
+                                  view_tokens=view_tokens,
                                   processor_use_fast=processor_use_fast)
 
 
@@ -117,9 +139,9 @@ class ProfilePolicyView:
     def __init__(self, owner, name):
         self.owner, self.name = owner, name
         self.profile = owner.profiles[name]
-        self.trajectory_sampling = SimpleNamespace(num_poses=self.profile.horizon, interval_length=POSE_INTERVAL_S,
-                                                   time_horizon=self.profile.horizon * POSE_INTERVAL_S)
+        self.trajectory_sampling = owner.trajectory_sampling_for_source(name)
         self.head = owner.heads[name]
+        self.vae_path = owner._head_options[name]["vae_path"]
 
     def forward(self, features, targets=None, tokens=None):
         features = dict(features)
@@ -192,7 +214,11 @@ class MultiProfilePolicy(nn.Module):
                  exact_resume: bool = False,
                  attn_implementation: str = "sdpa", gradient_checkpointing: bool = True,
                  cache_frozen_prefix: bool = False, dtype: str = "bfloat16", vlm_variant: str = "2b",
-                 checkpoint_frame=None,
+                 checkpoint_frame=None, visual_lora: Optional[Dict] = None, visual_wasp: Optional[Dict] = None,
+                 llm_wasp: Optional[Dict] = None, visual_projector_wasp: Optional[Dict] = None,
+                 canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
+                 coc_jsonl_path: Optional[str] = None, coc_language_loss_weight: Optional[float] = None,
+                 coc_planning_loss_weight: float = 0.0, head_overrides=None,
                  _shared_core_factory=None, _processor_factory=None, _head_factory=None):
         super().__init__()
         self.profiles = _as_profiles(profiles)
@@ -212,8 +238,68 @@ class MultiProfilePolicy(nn.Module):
         self.lr, self.weight_decay, self.vlm_lr_mult = lr, weight_decay, vlm_lr_mult
         self.warmup_steps, self.warmup_start, self.min_lr_ratio = warmup_steps, warmup_start, min_lr_ratio
         self.train_vlm = bool(train_vlm)
-        self.trajectory_sampling = SimpleNamespace(num_poses=self.profiles[next(iter(self.profiles))].horizon,
-                                                   interval_length=POSE_INTERVAL_S)
+        if not isinstance(canbus_sft_prompt, bool) or not isinstance(coc_language_prompt, bool):
+            raise TypeError("canbus_sft_prompt and coc_language_prompt must be booleans")
+        if coc_language_loss_weight is not None and (isinstance(coc_language_loss_weight, bool)
+                or not isinstance(coc_language_loss_weight, (int, float))
+                or not math.isfinite(float(coc_language_loss_weight)) or coc_language_loss_weight < 0):
+            raise ValueError("coc_language_loss_weight must be a finite nonnegative number or null")
+        if isinstance(coc_planning_loss_weight, bool) or not isinstance(coc_planning_loss_weight, (int, float)) \
+                or not math.isfinite(float(coc_planning_loss_weight)):
+            raise ValueError("coc_planning_loss_weight must be a finite number")
+        global_head_options = {
+            "canbus_sft_prompt": canbus_sft_prompt,
+            "coc_language_prompt": coc_language_prompt,
+            "coc_jsonl_path": coc_jsonl_path,
+            "coc_language_loss_weight": coc_language_loss_weight,
+            "coc_planning_loss_weight": coc_planning_loss_weight,
+            "vae_path": vae_path,
+        }
+        self._global_head_options = copy.deepcopy(global_head_options)
+        overrides = _config_mapping(head_overrides, "head_overrides") or {}
+        self._head_overrides = copy.deepcopy(overrides)
+        unknown_profiles = set(overrides) - set(self.profiles)
+        if unknown_profiles:
+            raise ValueError(f"head_overrides contains unknown profile names: {sorted(unknown_profiles)}")
+        self._head_options = {}
+        for name in self.profiles:
+            profile_override = _config_mapping(overrides.get(name, {}), f"head_overrides.{name}") or {}
+            unknown_options = set(profile_override) - _PROFILE_HEAD_OPTIONS
+            if unknown_options:
+                raise ValueError(f"head_overrides.{name} contains unsupported options: {sorted(unknown_options)}")
+            options = {**global_head_options, **profile_override}
+            for key in ("canbus_sft_prompt", "coc_language_prompt"):
+                if not isinstance(options[key], bool):
+                    raise TypeError(f"head_overrides.{name}.{key} must be a boolean")
+            weight = options["coc_language_loss_weight"]
+            if weight is not None and (isinstance(weight, bool) or not isinstance(weight, (int, float))
+                    or not math.isfinite(float(weight)) or weight < 0):
+                raise ValueError(f"head_overrides.{name}.coc_language_loss_weight must be finite and nonnegative")
+            planning_weight = options["coc_planning_loss_weight"]
+            if isinstance(planning_weight, bool) or not isinstance(planning_weight, (int, float)) \
+                    or not math.isfinite(float(planning_weight)):
+                raise ValueError(f"head_overrides.{name}.coc_planning_loss_weight must be a finite number")
+            if planning_weight:
+                raise ValueError("coc_planning_loss_weight must be 0; the release recipes add no CoC planning loss")
+            if options["coc_jsonl_path"] is not None and not isinstance(options["coc_jsonl_path"], str):
+                raise TypeError(f"head_overrides.{name}.coc_jsonl_path must be a string or null")
+            if options["vae_path"] is not None and not isinstance(options["vae_path"], str):
+                raise TypeError(f"head_overrides.{name}.vae_path must be a string or null")
+            if options["canbus_sft_prompt"] and len(self.profiles[name].status_layout) < 10:
+                raise ValueError(f"canbus_sft_prompt requires all 10 ego-status fields; profile {name!r} "
+                                 f"provides {len(self.profiles[name].status_layout)}")
+            self._head_options[name] = options
+
+        self._shared_adapter_options = {
+            "visual_lora": _config_mapping(visual_lora, "visual_lora"),
+            "visual_wasp": _config_mapping(visual_wasp, "visual_wasp"),
+            "llm_wasp": _config_mapping(llm_wasp, "llm_wasp"),
+            "visual_projector_wasp": _config_mapping(visual_projector_wasp, "visual_projector_wasp"),
+        }
+        self._lora_options = _config_mapping(lora, "lora")
+        self._effective_lora_options = (None if self._shared_adapter_options["llm_wasp"] is not None
+                                        else self._lora_options)
+        self.trajectory_sampling = self.trajectory_sampling_for_source(next(iter(self.profiles)))
         self.heads = nn.ModuleDict()
         self._profile_runtime = {}
         self._target_view_token_ids = {}
@@ -222,7 +308,8 @@ class MultiProfilePolicy(nn.Module):
         view_tokens = sorted({token for profile in self.profiles.values() for token in profile.view_tokens})
         core_factory = _shared_core_factory or _build_shared_core
         shared_core = core_factory(vlm_path=vlm_path, view_tokens=view_tokens, dtype=dtype, train_vlm=train_vlm,
-                                   lora=lora, processor_use_fast=None, vlm_variant=vlm_variant)
+                                   lora=self._effective_lora_options, processor_use_fast=None, vlm_variant=vlm_variant,
+                                   **self._shared_adapter_options)
         self.shared_core = shared_core
         processor_factory = _processor_factory or _build_processor
         head_factory = _head_factory
@@ -238,11 +325,15 @@ class MultiProfilePolicy(nn.Module):
             if token_ids != core_ids:
                 raise ValueError(f"profile {profile.name!r} tokenizer assigns different IDs to shared view tokens")
             runtime = ProfileRuntimeView(shared_core, processor, profile, profile.cast_stream_dtype,
-                                         attn_implementation)
+                                         attn_implementation,
+                                         head_options={**self._shared_adapter_options, **self._head_options[profile.name]})
+            options = self._head_options[profile.name]
+            options_for_head = {key: value for key, value in options.items() if key != "vae_path"}
             if _head_factory is None:
-                kwargs = head_kwargs(profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
-                                     gradient_checkpointing, cache_frozen_prefix)
-                kwargs.update(lora_cfg=lora, shared_runtime=runtime, vlm_variant=vlm_variant)
+                kwargs = head_kwargs(profile, vlm_path, options["vae_path"], train_vlm, with_motion,
+                                     attn_implementation, gradient_checkpointing, cache_frozen_prefix,
+                                     vlm_variant=vlm_variant, **self._shared_adapter_options, **options_for_head)
+                kwargs.update(lora_cfg=self._effective_lora_options, shared_runtime=runtime)
                 head = head_factory(**kwargs)
             else:
                 head = head_factory(profile, runtime)
@@ -294,8 +385,11 @@ class MultiProfilePolicy(nn.Module):
 
     def trajectory_sampling_for_source(self, name: str):
         profile = self.profile_for_source(name)
-        return SimpleNamespace(num_poses=profile.horizon, interval_length=POSE_INTERVAL_S,
-                               time_horizon=profile.horizon * POSE_INTERVAL_S)
+        interval = float(profile.pose_interval)
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError(f"profile {name!r} pose_interval must be finite and positive")
+        return SimpleNamespace(num_poses=profile.horizon, interval_length=interval,
+                               time_horizon=profile.horizon * interval)
 
     def worker_transform(self, image_augment=None, train=False, only=None):
         transforms = {name: self._make_transform(name, image_augment, train)
@@ -351,10 +445,27 @@ class MultiProfilePolicy(nn.Module):
             raise KeyError(f"unknown source profile {name!r}; available: {sorted(self.heads)}")
         head, runtime = self.heads[name], self._profile_runtime[name]
         features.pop("profile", None)
+        tokens = self._tokens_for_profile(tokens, name)
         if not self.training and task == "planning":
             with runtime.inference_config():
                 return self._forward_single_profile(head, self.profiles[name], features, targets, tokens)
         return self._forward_single_profile(head, self.profiles[name], features, targets, tokens)
+
+    @staticmethod
+    def _tokens_for_profile(tokens, name):
+        if tokens is None:
+            return None
+        values = [tokens] if isinstance(tokens, str) else list(tokens)
+        prefix = f"source={name}::"
+        output = []
+        for token in values:
+            token = str(token)
+            if token.startswith("source="):
+                if not token.startswith(prefix):
+                    raise ValueError(f"sample token source does not match selected profile {name!r}: {token!r}")
+                token = token[len(prefix):]
+            output.append(token)
+        return output
 
     def _forward_single_profile(self, head, profile, features, targets, tokens):
         # Reuse the single-profile adapter's task and loss path, including the head's combined AR loss.
@@ -409,6 +520,8 @@ class MultiProfilePolicy(nn.Module):
         if any(key.startswith("shared_core.") for key in state):
             _check_checkpoint_frames(checkpoint, self.profiles, require_all=True,
                                      checkpoint_frame=self.checkpoint_frame)
+            if strict:
+                self._check_checkpoint_options(checkpoint)
             self._load_multidomain_state(state, checkpoint, strict=strict)
             return
         if strict:
@@ -541,6 +654,62 @@ class MultiProfilePolicy(nn.Module):
         if missing:
             raise KeyError(f"multidomain checkpoint omits tensors, e.g. {sorted(missing)[:5]}")
         self.load_state_dict(loaded, strict=True)
+
+    def _check_checkpoint_options(self, checkpoint):
+        """Strict inference must use the shared adapters and profile behavior saved with these weights."""
+        saved = checkpoint.get("agent_config")
+        if not isinstance(saved, dict):
+            return  # older complete checkpoints keep the legacy strict weight/frame checks
+
+        current_adapters = {key: value for key, value in self._shared_adapter_options.items()
+                            if key != "llm_wasp"}
+        for key, current in current_adapters.items():
+            if key not in saved:
+                if current is not None:
+                    raise ValueError(f"strict multidomain load needs checkpoint agent_config.{key}")
+                continue
+            source = _config_mapping(saved[key], f"checkpoint agent_config.{key}")
+            if source != current:
+                raise ValueError(f"strict multidomain checkpoint {key} configuration does not match the model")
+
+        if "lora" in saved or "llm_wasp" in saved:
+            saved_language = ("llm_wasp", saved.get("llm_wasp")) if saved.get("llm_wasp") is not None else (
+                "lora", saved.get("lora"))
+            current_language = ("llm_wasp", self._shared_adapter_options["llm_wasp"])
+            if self._shared_adapter_options["llm_wasp"] is None:
+                current_language = ("lora", self._lora_options)
+            if saved_language[0] != current_language[0] or _config_mapping(saved_language[1],
+                    f"checkpoint agent_config.{saved_language[0]}") != current_language[1]:
+                raise ValueError("strict multidomain checkpoint language adapter configuration does not match the model")
+        elif self._shared_adapter_options["llm_wasp"] is not None or self._lora_options is not None:
+            raise ValueError("strict multidomain load needs checkpoint agent_config.lora or llm_wasp")
+
+        if "head_overrides" not in saved:
+            return  # configs predating per-profile head settings remain loadable
+        saved_overrides = _config_mapping(saved.get("head_overrides"), "checkpoint agent_config.head_overrides") or {}
+        unknown_profiles = set(saved_overrides) - set(self.profiles)
+        if unknown_profiles:
+            raise ValueError(f"checkpoint head_overrides contains unknown profiles: {sorted(unknown_profiles)}")
+        saved_global = {
+            "canbus_sft_prompt": saved.get("canbus_sft_prompt", False),
+            "coc_language_prompt": saved.get("coc_language_prompt", False),
+            "coc_jsonl_path": saved.get("coc_jsonl_path"),
+            "coc_language_loss_weight": saved.get("coc_language_loss_weight"),
+            "coc_planning_loss_weight": saved.get("coc_planning_loss_weight", 0.0),
+            "vae_path": saved.get("vae_path"),
+        }
+        for name in self.profiles:
+            source_overrides = _config_mapping(saved_overrides.get(name, {}),
+                                               f"checkpoint agent_config.head_overrides.{name}") or {}
+            unknown_options = set(source_overrides) - _PROFILE_HEAD_OPTIONS
+            if unknown_options:
+                raise ValueError(f"checkpoint profile {name!r} has unsupported head options: "
+                                 f"{sorted(unknown_options)}")
+            source_options = {**saved_global, **source_overrides}
+            for key in _PROFILE_HEAD_OPTIONS:
+                if source_options[key] != self._head_options[name][key]:
+                    raise ValueError(f"strict multidomain checkpoint profile {name!r} option {key!r} "
+                                     "does not match the model")
 
     def _source_view_token_ids(self, profile):
         tokenizer = self.shared_core.processor.tokenizer

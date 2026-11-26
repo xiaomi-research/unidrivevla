@@ -213,8 +213,11 @@ def _profiles(cfg, agent=None):
 
 
 class _SourceAgent:
-    def __init__(self, profile):
+    def __init__(self, profile, vae_path=None):
         self.profile = profile
+        # Presence is significant: None is an explicit source-specific choice and must not fall
+        # back to a different profile's global VAE path.
+        self.vae_path = vae_path
 
 
 @register("multidomain")
@@ -238,8 +241,22 @@ def multidomain_loader(cfg, agent, split: str):
         profile = profiles[name] if isinstance(profiles[name], Profile) else Profile.from_config(profiles[name])
         source_cfg.profile = OmegaConf.create(profile.__dict__)
         source_cfg.data_loader = loader
+        profile_policy = getattr(agent, "policy_for_source", None)
+        if callable(profile_policy):
+            source_policy = profile_policy(name)
+            if hasattr(source_policy, "vae_path"):
+                vae_path = source_policy.vae_path
+            elif hasattr(source_policy, "head") and hasattr(source_policy.head, "occworld_vae_path"):
+                vae_path = source_policy.head.occworld_vae_path
+            else:
+                vae_path = OmegaConf.select(source_cfg, "agent.vae_path")
+        else:
+            vae_path = OmegaConf.select(source_cfg, "agent.vae_path")
+        if OmegaConf.select(source_cfg, "agent") is None:
+            source_cfg.agent = OmegaConf.create({})
+        source_cfg.agent.vae_path = vae_path
         weight = float(source.get("weight", 1.0))
-        dataset = LOADERS[loader](source_cfg, _SourceAgent(profile), split)
+        dataset = LOADERS[loader](source_cfg, _SourceAgent(profile, vae_path), split)
         if len(dataset) == 0:
             raise ValueError(f"multidomain source {name!r} is empty for split {split!r}")
         names.append(name)

@@ -7,6 +7,26 @@ defaults:
   - /default_evaluation
   - /default_train_val_test_log_split
 
+# NuScenes stage recipes set root `profile.*` fields, while the mixed agent reads the scoped profile map.
+# Interpolate only this source so B2D and NAVSIM retain their own checkpoint prompt contracts.
+profiles:
+  nuscenes:
+    prefix_max_len: ${oc.select:profile.prefix_max_len,3740}
+    official_attention_mask: ${oc.select:profile.official_attention_mask,true}
+    official_command_text: ${oc.select:profile.official_command_text,true}
+
+# This mixed dataset only supplies CoC supervision for nuScenes.
+agent:
+  head_overrides:
+    b2d:
+      canbus_sft_prompt: false
+      coc_language_prompt: false
+      coc_jsonl_path: null
+    navsim:
+      canbus_sft_prompt: false
+      coc_language_prompt: false
+      coc_jsonl_path: null
+
 data_loader: multidomain
 multidomain:
   sources:
