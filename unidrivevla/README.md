@@ -501,7 +501,7 @@ JSONL 使用 main 的 `image`（单路径、路径列表或无图片）和 `conv
 
 新 checkpoint 自带 resolved `agent_config`，`infer.py` 自动恢复单/多 profile 与 motion 架构，并检查与所选数据源是否相容；显式 `agent.vlm_path` 或 `VLM_PRETRAINED_PATH` 可覆盖权重目录。旧 checkpoint 仍需给出原来的 profile 和 stage 配置。推理、NAVSIM agent 与闭环服务都要求完整模型权重，缺失冻结权重或架构不符会报错。stage 1→stage 2 初始化完整恢复已有共享、冻结和 head 权重，只允许新加入的 motion 参数从新初始化开始。
 
-训练导出的新 checkpoint 还保存 `compute_parameter_dtypes`：DDP 记录实际参数 dtype，FSDP 记录分片参数的执行 dtype 和忽略参数的原 dtype。推理严格加载全部权重后校验完整映射，再恢复各浮点参数的精度，保留共享参数身份及 buffer dtype；不允许错误或缺失条目静默降级。旧 checkpoint 没有此映射时保持原加载行为。
+训练导出的新 checkpoint 保存 `compute_parameter_dtypes`。DDP 记录实际参数 dtype，FSDP 记录分片参数的执行 dtype 和忽略参数的原 dtype。普通原生推理严格加载全部权重并校验精度映射，再恢复各浮点参数的精度，保留共享参数身份和 buffer dtype。正式 nuScenes PR10 评分也校验完整映射，计算时使用原版评测的建模精度。旧 checkpoint 缺少此映射时沿用对应入口的加载行为。
 
 ```bash
 python infer.py data=nuscenes nuscenes.occ_root=null agent.checkpoint_path=/path/to/nuscenes/last.ckpt
@@ -562,7 +562,15 @@ python infer.py data=nuscenes evaluator.name=nuscenes_pr10_motion nuscenes.versi
 
 每次 `infer.py` 都在新 run 下导出 `predictions/rank-*.pt`，释放模型后再启动 CPU scorer。Stage 2 结果位于 `eval/nuscenes_pr10/<tag>/`，重点文件是 `nuscenes_pr10_metrics.json`、`nuscenes_pr10_coverage.json` 和 `eval.log`；原 PR10 evaluator 的结果/中间文件也留在该目录。Stage 3 输出 `nuscenes_pr10_motion_metrics.json`、`nuscenes_pr10_motion_coverage.json` 和 `eval.log`。Stage 2 的覆盖记录区分 `strict_valid_samples` 与 `loose_tokens_scored`；日志打印的 strict 3D-box 表只计完整 6 点未来，loose occupancy 表按有有效栅格的 token 计数。
 
-Stage 3 的 `trajs_3d` 以当前帧 LiDAR 的绝对 XY 表示，含 6 个候选、每个 12 个半秒步。原评分器对得分达到 0.20 的检测分别输出 car 和 pedestrian 的 EPA、minADE、minFDE 与 miss rate。读取 car 的 `car_min_ade_err` / `car_min_fde_err`（米）时，同时核对 EPA 和验证帧覆盖数。
+PR10 without-ego 的 Stage 2 和 Stage 3 均用 SDPA 联合训练。Stage 2 推理默认用 eager，Stage 3 推理默认用 SDPA。Stage 3 训练时最后一个有效前缀 token 可以读取感知特征，即使 VLM 权重已冻结，也会做联合前向。旧版原生 Stage 2 权重中能识别出这套配方、且未记录推理后端时，加载器会恢复 eager。已有明确记录时沿用记录。要复核另一个后端，可在上面的推理命令末尾添加 `++profile.inference_attn_impl=eager` 或 `++profile.inference_attn_impl=sdpa`。
+
+两个阶段都按 PR10 编译相机特征融合层（`profile.compile_feature_fusion=true`）。逐步执行 BF16 乘加会改变中间舍入，进而改变感知和规划输出。首次在新环境运行这两个配方时需等待 PyTorch 编译。
+
+训练结束和单独运行 `infer.py` 时，两个正式 PR10 evaluator 都按原版 `tools/test.py` 的方式加载 checkpoint。每个 rank 使用一个完整模型副本，各层采用建模时的精度（含 FP32 动作输出层），再按场景分配验证帧。
+
+重评已有权重可以直接运行上述推理命令。要复现训练过程，已经走过错误前缀缓存的 Stage 3 应从正确的 Stage 2 checkpoint 重新续训。如果 Stage 2 也用了旧版逐步 BF16 融合，就从 Stage 1 的 HF 导出重跑 Stage 2，再接 Stage 3。
+
+Stage 3 的 `trajs_3d` 是当前帧 LiDAR 的绝对 XY，含 6 个候选，每个 12 个半秒步。评分器对得分达到 0.20 的检测分别计算 car 和 pedestrian 的 EPA、minADE、minFDE 与 miss rate。覆盖文件的 `classes` 记录各类经官方过滤后的真值数、预测数和匹配状态。有真值但零匹配时，EPA 按每个假阳性扣 0.5 再除以真值数，三项轨迹误差记为 `null`。该类没有真值时四项均为 `null`。有匹配但达不到最低召回率时，保留 PR10 的 1.0 占位值，并标记 `below_min_recall`。
 
 保存好的 predictions 也可单独重评分。下面的输出目录必须是新建空目录；不传 `--pr10-root` 时自动读取随包的固定源码 bundle：
 

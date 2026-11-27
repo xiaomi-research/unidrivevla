@@ -87,6 +87,10 @@ def main():
     # module layout must stay identical so the old DeepSpeed planning_head.* tensors can migrate by name.
     stage2 = recipe("nuscenes", "nusc_2b_stage2")
     stage3 = recipe("nuscenes", "nusc_2b_stage3")
+    expect(stage2, "profile.inference_attn_impl", "eager", "nusc_2b_stage2")
+    expect(stage3, "profile.inference_attn_impl", "sdpa", "nusc_2b_stage3")
+    expect(stage2, "profile.compile_feature_fusion", True, "nusc_2b_stage2")
+    expect(stage3, "profile.compile_feature_fusion", True, "nusc_2b_stage3")
     expect(stage2, "agent.checkpoint_frame", "lidar", "nusc_2b_stage2")
     expect(stage2, "augment.geometry.rng_mode", "pr10_numpy", "nusc_2b_stage2")
     expect(stage2, "dataloader.params.num_workers", 8, "nusc_2b_stage2")

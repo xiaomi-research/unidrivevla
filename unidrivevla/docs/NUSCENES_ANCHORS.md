@@ -74,17 +74,15 @@ initializer seeds NumPy and Python with `num_workers * rank + worker_id + seed`;
 torch RNG. The target Stage2/Stage3 recipes use eight workers per GPU and the native loader uses the same worker-seed
 formula in their `pr10_numpy` mode.
 
-Both official nuScenes geometry and photometric augmentation use `numpy.random`: the old pipeline imports `random` from
-NumPy in `datasets/pipelines/augment.py`, and geometry uses NumPy in `nuscenes_3d_dataset.py`. Native Stage2 sets
-`augment.geometry.rng_mode=pr10_numpy`; its geometry and `PhotoMetricDistortion` also use NumPy. The Stage3 recipe
-inherits Stage2's setting. Generic recipes keep the old defaults (`num_workers=4`, Python-RNG geometry); the PR-10
-overrides are limited to the dedicated Stage2/Stage3 recipe.
+Stage2 sets `augment.geometry.rng_mode=pr10_numpy` and Stage3 inherits it. On the training split, geometry and
+photometric distortion draw from NumPy. Within each frame the loader applies photometric distortion in the order of
+the original info's `cams` dictionary. Images, intrinsics and projections reach the model in the profile's view order.
 
-The selected nuScenes PR-10 path now aligns the RNG library, per-worker seed formula, worker count, and sequence-group
-boundary checks. This is stronger than merely reusing seed `0`, but it is not a guarantee of identical full-run sample
-ordering or weights. The PR-10 run used DeepSpeed ZeRO-1, while the native recipe uses the DDP trainer and its optimizer
-path; rank scheduling, GPU kernels, and remaining nondeterministic operations still differ. The public-source receipt
-does not document a private run's per-sample augmentation trace.
+During an uninterrupted run, each logical epoch takes `len(train_loader)` batches from one continuous PyTorch
+DataLoader iterator. Workers keep their RNG state and their prefetched batches across epoch boundaries, including
+when the epoch length is not a multiple of the worker count. The explicit `train.exact_resume=true` mode uses its
+existing checkpoint replay path with `num_workers=0` per rank. `python tools/check_nuscenes_pr10_rng.py` exercises
+the camera order and multiple epoch boundaries from the package directory.
 
 The public-main anchor arrays can be reused exactly by importing and SHA-checking those files. A newly seeded fit is
 repeatable only under a fixed data/toolchain. Neither anchor hashes nor a shared seed guarantee identical training

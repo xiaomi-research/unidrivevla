@@ -78,6 +78,7 @@ class Profile:
     box_size_clamp: Optional[List[float]] = None  # log-size clamp; null: nuScenes [-0.5, 3.5], Bench2Drive [-5, 5]
     hf_attn_impl: str = "flash_attention_2"  # preserve historical Qwen3-VL HF vision/AR behavior for old profiles
     inference_attn_impl: str = "sdpa"
+    compile_feature_fusion: bool = False
     cast_inference_mask: bool = True  # false: Bench2Drive leaves the inference mask in fp32
     detach_plan_geometry: bool = False  # Bench2Drive detaches the trajectory before the collision / map losses
     summed_planning_loss: bool = False  # true: Bench2Drive's sum returned as `loss` too, those terms counted twice
@@ -98,6 +99,10 @@ class Profile:
         if unknown:
             raise ValueError(f"unknown profile keys: {sorted(unknown)}")
         profile = cls(**values)
+        if profile.inference_attn_impl not in ("eager", "sdpa"):
+            raise ValueError("profile.inference_attn_impl must be 'eager' or 'sdpa'")
+        if type(profile.compile_feature_fusion) is not bool:
+            raise ValueError("profile.compile_feature_fusion must be a boolean")
         if not isinstance(profile.train_precision, str) or profile.train_precision not in ("native", "bf16", "fp32"):
             raise ValueError("profile.train_precision must be one of 'native', 'bf16', or 'fp32'")
         if type(profile.ddp_cast_frozen_parameters) is not bool:
@@ -202,8 +207,13 @@ def camera_inputs(features: Dict, profile: Profile, image_augment=None, train: b
         raise KeyError(f"profile {profile.name} needs cameras {missing}, the source has {sorted(by_view)}")
     geometry = features.get("augment")
     augment_mat = geometry_matrix(width, height, geometry)
-    images, mats, focals = [], [], []
-    for view in profile.cameras:
+    slots = list(enumerate(profile.cameras))
+    if train and image_augment is not None and "camera_augmentation_order" in features:
+        order = features["camera_augmentation_order"]
+        slots.sort(key=lambda slot: order.index(slot[1]))
+    # Read and augment in source order when requested, but keep each image with its model slot and calibration.
+    views = [None] * len(slots)
+    for slot, view in slots:
         cam = by_view[view]
         intrinsic = np.array(cam["intrinsic"], dtype=np.float64)
         crop = resize_crop(cam["size"], (height, width), profile.train_resize, train)
@@ -215,15 +225,15 @@ def camera_inputs(features: Dict, profile: Profile, image_augment=None, train: b
             intrinsic[:2, 2] -= crop[2][:2]
         view_mat = np.eye(4)
         view_mat[:3, :3] = intrinsic
-        mats.append(augment_mat @ view_mat @ np.linalg.inv(np.asarray(cam["sensor2ego"], dtype=np.float64)))
-        focals.append(intrinsic[0, 0])
+        projection = augment_mat @ view_mat @ np.linalg.inv(np.asarray(cam["sensor2ego"], dtype=np.float64))
         pixels = cam["image"] if "image" in cam else cam["path"]
-        images.append(load_bgr(pixels, height, width, image_augment, geometry, crop).transpose(2, 0, 1))
-    views = len(profile.cameras)
+        image = load_bgr(pixels, height, width, image_augment, geometry, crop).transpose(2, 0, 1)
+        views[slot] = (image, projection, intrinsic[0, 0])
+    images, mats, focals = zip(*views)
     return {
         "img": torch.from_numpy(np.stack(images)),
         "projection_mat": torch.from_numpy(np.stack(mats).astype(np.float32)),
-        "image_wh": torch.tensor([[width, height]] * views, dtype=torch.float32),
+        "image_wh": torch.tensor([[width, height]] * len(views), dtype=torch.float32),
         "focal": torch.tensor(focals, dtype=torch.float32),
     }
 
@@ -585,6 +595,7 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         detach_plan_geometry=profile.detach_plan_geometry, summed_planning_loss=profile.summed_planning_loss,
         official_command_text=profile.official_command_text,
         official_attention_mask=profile.official_attention_mask,
+        compile_feature_fusion=getattr(profile, "compile_feature_fusion", False),
         perception_first_token_boundary=getattr(profile, "perception_first_token_boundary", True),
         cast_inference_mask=profile.cast_inference_mask, processor_use_fast=profile.processor_use_fast,
         cast_stream_dtype=profile.cast_stream_dtype,
@@ -853,6 +864,10 @@ def _validate_stage3_checkpoint_config(policy, checkpoint, source_motion, strict
         name = field.name
         if name == "anchors_dir":
             continue  # the path may move; Stage3's anchor files still need the verified same baseline contents
+        if name == "inference_attn_impl":
+            continue  # a validated decoding backend neither changes weights nor participates in joint training
+        if name == "compile_feature_fusion" and name not in source_profile_cfg:
+            continue  # older native Stage2/3 exports can initialize the corrected execution path
         if name == "motion_anchor_encoder":
             if not source_motion and source_profile.motion_anchor_encoder not in (
                     None, "SparseBox3DEncoder", profile.motion_anchor_encoder):
@@ -889,7 +904,7 @@ def _validate_stage3_checkpoint_config(policy, checkpoint, source_motion, strict
 
     same_agent_fields = [
         "weight_decay", "warmup_steps", "warmup_start", "min_lr_ratio", "vlm_lr_mult", "vlm_variant",
-        "gradient_checkpointing", "cache_frozen_prefix", "attn_implementation", "canbus_sft_prompt",
+        "gradient_checkpointing", "attn_implementation", "canbus_sft_prompt",
         "lora", "visual_lora", "visual_wasp", "llm_wasp", "visual_projector_wasp",
     ]
     # infer.py/serve.py deliberately turn activation checkpointing off for a strict live evaluation.
@@ -989,7 +1004,6 @@ class UniDriveVLAPolicy(nn.Module):
             "vlm_lr_mult": vlm_lr_mult,
             "vlm_variant": vlm_variant,
             "gradient_checkpointing": bool(gradient_checkpointing),
-            "cache_frozen_prefix": bool(cache_frozen_prefix),
             "attn_implementation": attn_implementation,
             "canbus_sft_prompt": bool(canbus_sft_prompt),
             "vlm_path": str(vlm_path),

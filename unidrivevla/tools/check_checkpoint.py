@@ -322,6 +322,7 @@ def check_stage3_checkpoint_config_contract(root):
     target_profile.lr_microstep = True
     target_profile.motion_anchor_encoder = "MotionAnchorSineEncoder"
     source_profile = asdict(target_profile)
+    source_profile["inference_attn_impl"] = "eager"
     source_profile["motion_anchor_encoder"] = None  # Stage 2 has no motion branch.
     options = {
         "weight_decay": 1.0e-7, "warmup_steps": 125, "warmup_start": 1.0 / 3,
@@ -363,7 +364,7 @@ def check_stage3_checkpoint_config_contract(root):
     migrated = MainNamespacePolicy(target_profile, str(compatible_path), with_motion=True, train_vlm=False,
                                    checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
                                    lr=1.0e-4)
-    migrated._checkpoint_stage3_options = options
+    migrated._checkpoint_stage3_options = {**options, "cache_frozen_prefix": False}
     migrated.initialize()
     check(all(torch.equal(source_native.state_dict()[name], migrated.state_dict()[name])
               for name in source_native.state_dict()),
@@ -406,6 +407,11 @@ def check_stage3_checkpoint_config_contract(root):
     infer_cfg = OmegaConf.create({"data_loader": "nuscenes", "profile": {"name": "nuscenes"}, "agent": {}})
     check(restore_checkpoint_agent_config(infer_cfg, stage3_path),
           "infer.py restores native Stage3 metadata before strict checkpoint loading")
+    infer_cfg.profile.inference_attn_impl = "eager"
+    restore_checkpoint_agent_config(infer_cfg, stage3_path)
+    check(infer_cfg.agent.profile.inference_attn_impl == "sdpa", "default inference keeps the saved backend")
+    restore_checkpoint_agent_config(infer_cfg, stage3_path, task_overrides=["++profile.inference_attn_impl=eager"])
+    check(infer_cfg.agent.profile.inference_attn_impl == "eager", "explicit inference backend survives restoration")
     check(infer_cfg.agent.gradient_checkpointing is False,
           "strict inference applies the existing gradient-checkpointing override")
     restored_profile = Profile.from_config(OmegaConf.to_container(infer_cfg.agent.profile, resolve=True))
@@ -415,6 +421,33 @@ def check_stage3_checkpoint_config_contract(root):
         checkpoint_transition=infer_cfg.agent.checkpoint_transition, lr=float(infer_cfg.agent.lr))
     infer_target._checkpoint_stage3_options["gradient_checkpointing"] = bool(infer_cfg.agent.gradient_checkpointing)
     infer_target.initialize(strict=True)
+    from unidrivevla.adapters import load_checkpoint_agent_config
+    old = deepcopy(source_agent)
+    old["profile"].pop("inference_attn_impl")
+    old["profile"].pop("compile_feature_fusion")
+    old["profile"]["status_layout"] = list(range(10))
+    old["canbus_sft_prompt"] = False
+    old_path = root / "older-profile.ckpt"
+    for changes, expected in (({}, "eager"), ({"canbus_sft_prompt": True}, None),
+                              ({"coc_language_prompt": False}, None), ({"with_motion": True}, None)):
+        torch.save({"agent_config": {**old, **changes}}, old_path)
+        migrated_profile = load_checkpoint_agent_config(old_path)["profile"]
+        assert migrated_profile.get("inference_attn_impl") == expected
+        assert migrated_profile.get("compile_feature_fusion") == (True if expected else None)
+    old_stage3 = {**old, "with_motion": True, "coc_language_prompt": False,
+                  "checkpoint_transition": "nusc_2b_stage2_to_stage3"}
+    torch.save({"agent_config": old_stage3}, old_path)
+    assert load_checkpoint_agent_config(old_path)["profile"]["compile_feature_fusion"] is True
+    old["profile"]["compile_feature_fusion"] = False
+    old["profile"]["inference_attn_impl"] = "sdpa"
+    torch.save({"agent_config": old}, old_path)
+    assert load_checkpoint_agent_config(old_path)["profile"]["inference_attn_impl"] == "sdpa"
+    assert load_checkpoint_agent_config(old_path)["profile"]["compile_feature_fusion"] is False
+    multi = {"_target_": "unidrivevla.adapters.multidomain.MultiProfilePolicy",
+             "profiles": {name: {"name": name, "inference_attn_impl": "sdpa"} for name in ("nuscenes", "b2d")}}
+    torch.save({"agent_config": multi}, old_path)
+    restore_checkpoint_agent_config(infer_cfg, old_path, task_overrides=["++profile.inference_attn_impl=eager"])
+    assert [infer_cfg.agent.profiles[name].inference_attn_impl for name in ("nuscenes", "b2d")] == ["eager", "sdpa"]
     check(True, "infer.py gradient-checkpointing override passes strict Stage3 metadata compatibility")
 
     stage3_training_target = MainNamespacePolicy(
@@ -429,6 +462,9 @@ def check_stage3_checkpoint_config_contract(root):
         raise AssertionError("dedicated Stage3 training accepted a motion-enabled same-stage checkpoint")
 
     negative_cases = []
+    changed = deepcopy(source_agent)
+    changed["profile"]["inference_attn_impl"] = "sddpa"
+    negative_cases.append((changed, "inference_attn_impl"))
     changed = deepcopy(source_agent)
     changed["profile"]["official_command_text"] = True
     negative_cases.append((changed, "profile mismatch"))
@@ -604,6 +640,32 @@ def check_inference_compute_dtypes(root):
     check(restored.primary.dtype == torch.bfloat16 and restored.frozen.dtype == torch.bfloat16,
           "strict inference initialization restores trainable and frozen BF16 parameter dtypes")
     check(torch.equal(source(), restored()), "BF16 training and inference outputs match bitwise after round trip")
+    captures = []
+    def capture(tr, ckpt, tag):
+        assert tr.model is tr.agent and tr.model.primary.dtype == torch.float32
+        assert torch.equal(tr.model.primary, saved["state_dict"]["primary"].float())
+        assert torch.get_float32_matmul_precision() == "highest"
+        captures.append((Path(ckpt).name, tag))
+
+    formal = SimpleNamespace(use_model_init_dtypes=True, on_end=True, benchmark="test",
+                             during_training=capture, release=lambda: None, finish=lambda _: [])
+    trainer.ctx = SimpleNamespace(device=torch.device("cpu"), is_main=True, world_size=1,
+                                  barrier=lambda: None, close=lambda: None)
+    trainer.agent = ComputeDtypePolicy(checkpoint_path=str(checkpoint))
+    old_precision = torch.get_float32_matmul_precision()
+    trainer.evaluate_checkpoint_in_model_dtypes([formal], checkpoint, "infer")
+    assert torch.get_float32_matmul_precision() == old_precision
+    trainer.output_dir = root / "final-pr10"
+    trainer.output_dir.mkdir()
+    torch.save(saved, trainer.output_dir / "last.ckpt")
+    trainer.evaluators, trainer.ema = [formal], None
+    trainer.cfg = OmegaConf.create({"agent": {}})
+    trainer.monitor = SimpleNamespace(close=lambda: None)
+    with patch("unidrivevla.train.trainer.instantiate",
+               side_effect=lambda cfg: ComputeDtypePolicy(checkpoint_path=cfg["checkpoint_path"])):
+        trainer.finish()
+    check(captures == [(checkpoint.name, "infer"), ("last.ckpt", "final")],
+          "standalone and final PR10 scoring load the saved weights in model construction dtypes")
     check(id(restored.primary) == parameter_identity == id(restored.tied_alias) == tied_identity,
           "dtype restoration preserves Parameter identity and tied aliases")
     check(restored.float_buffer.dtype == torch.float32 and torch.equal(restored.float_buffer, source.float_buffer)
@@ -639,6 +701,12 @@ def check_inference_compute_dtypes(root):
         check("does not match" in str(exc), "inference rejects partial dtype maps")
     else:
         raise AssertionError("inference accepted a partial dtype map")
+    try:
+        initialize_for_inference(ComputeDtypePolicy(checkpoint_path=str(incomplete)), restore_compute_dtypes=False)
+    except ValueError as exc:
+        assert "does not match" in str(exc)
+    else:
+        raise AssertionError("PR10 model-dtype scoring accepted incomplete metadata")
 
     fsdp_source = ComputeDtypePolicy(dtype=torch.float32, frozen_dtype=torch.float64)
     fsdp_args = SimpleNamespace(strategy="fsdp", precision="bf16", replicate_frozen=["frozen"])

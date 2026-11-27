@@ -150,6 +150,26 @@ def main():
     assert stage2_cfg.profile.perception_first_token_boundary is False
     assert stage3_composed.profile.perception_first_token_boundary is False
     assert stage3_composed.agent.coc_language_prompt is False
+    # Freezing the VLM does not freeze the last prefix token's dependence on perception.
+    nn.Module.__init__(head)
+    language = nn.Linear(4, 4).requires_grad_(False)
+    head.qwen3_vl_with_expert = types.SimpleNamespace(qwen3_vl=types.SimpleNamespace(language_model=language))
+    head.cache_frozen_prefix, head.enable_traj_ar, head.enable_knowledge_insulation = True, False, False
+    head.attn_implementation = "sdpa"
+    prefix = torch.tensor([[1., 2., 3., 4.]])
+    for official, boundary in ((False, False), (False, True), (True, False)):
+        head.official_attention_mask, head.perception_first_token_boundary = official, boundary
+        valid = torch.ones(1, 2, dtype=torch.bool)
+        marks = pr10_stage3.clone()
+        marks[:, 0] = boundary
+        mask = head._training_attention_masks(valid, valid, valid, marks, valid, valid)
+        can_cache = head._prefix_is_frozen(prefix)
+        assert can_cache == (not bool(mask[:, :2, 2:].any()))
+        qkv = torch.arange(24, dtype=torch.float32).reshape(1, 1, 6, 4).div(24).requires_grad_()
+        prefix_out = F.scaled_dot_product_attention(qkv, qkv, qkv, attn_mask=mask[:, None])[:, :, :2]
+        grad = torch.autograd.grad(prefix_out.sum(), qkv)[0]
+        assert bool(grad[:, :, 2:4].abs().sum()) == (not can_cache)
+    assert not head._prefix_is_frozen(prefix.requires_grad_())
     for scope in (
         ("nuscenes", "lidar", "sdpa", False, True),  # explicit legacy/no-CoC profile behavior
         ("nuscenes", "ego", "sdpa", False, True),

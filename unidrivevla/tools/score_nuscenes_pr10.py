@@ -9,6 +9,7 @@ import importlib.machinery
 from io import BytesIO
 import json
 import math
+from numbers import Real
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -272,23 +273,95 @@ def validate_metric_coverage(metrics, det_classes=PR10_DET_CLASSES, map_classes=
             raise ValueError(f"nonfinite or nonnumeric PR10 metric {key}: {value!r}")
 
 
-MOTION_METRIC_KEYS = tuple(
-    f"{name}_{metric}" for name in ("car", "pedestrian")
-    for metric in ("EPA", "min_ade_err", "min_fde_err", "miss_rate_err")
-)
+MOTION_CLASSES = ("car", "pedestrian")
+MOTION_TP_METRICS = ("min_ade_err", "min_fde_err", "miss_rate_err")
+MOTION_METRIC_KEYS = tuple(f"{name}_{metric}" for name in MOTION_CLASSES for metric in ("EPA", *MOTION_TP_METRICS))
 
 
-def validate_motion_metric_coverage(metrics):
-    missing = [key for key in MOTION_METRIC_KEYS if key not in metrics]
-    if missing:
-        raise ValueError(f"incomplete PR10 Stage3 motion metrics: missing {missing}")
-    for key, value in metrics.items():
-        try:
-            finite = math.isfinite(float(value))
-        except (TypeError, ValueError, OverflowError):
-            finite = False
-        if not finite:
-            raise ValueError(f"nonfinite or nonnumeric PR10 Stage3 motion metric {key}: {value!r}")
+def validate_motion_metric_coverage(metrics, classes=None):
+    def finite(value):
+        return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+    if set(metrics) != set(MOTION_METRIC_KEYS):
+        raise ValueError("incomplete PR10 Stage3 motion metrics")
+    if classes is None:  # Older numeric-only result files have no per-class coverage.
+        if not all(finite(value) for value in metrics.values()):
+            raise ValueError("undefined motion metrics require per-class coverage")
+        return
+    if set(classes) != set(MOTION_CLASSES):
+        raise ValueError("incomplete PR10 Stage3 motion class coverage")
+    for name in MOTION_CLASSES:
+        row = classes[name]
+        gt, pred, status = row["ground_truth"], row["predictions"], row["status"]
+        if any(type(count) is not int or count < 0 for count in (gt, pred)):
+            raise ValueError(f"invalid motion counts for {name}: {row}")
+        allowed = ({"no_ground_truth"} if gt == 0 else {"no_predictions"} if pred == 0 else
+                   {"scored", "below_min_recall", "no_matches"})
+        if status not in allowed:
+            raise ValueError(f"motion status contradicts counts for {name}: {row}")
+        for metric in ("EPA", *MOTION_TP_METRICS):
+            value = metrics[f"{name}_{metric}"]
+            if status == "no_ground_truth" or (status in ("no_predictions", "no_matches") and metric != "EPA"):
+                if value is not None:
+                    raise ValueError(f"undefined {name}_{metric} must be null")
+            elif not finite(value):
+                raise ValueError(f"invalid {name}_{metric}: {value!r}")
+        if status in ("no_predictions", "no_matches") and metrics[f"{name}_EPA"] != -0.5 * pred / gt:
+            raise ValueError(f"incorrect unmatched EPA for {name}")
+
+
+def _score_motion_classes(gt_boxes, pred_boxes, config):
+    from nuscenes.eval.detection.algo import calc_tp
+    from projects.mmdet3d_plugin.datasets.evaluation.motion.motion_utils import MotionMetricData, accumulate
+
+    metrics, classes = {}, {}
+    if config.dist_th_tp != 2.0:
+        raise ValueError("PR10 motion requires 2 m center matching")
+    for name in MOTION_CLASSES:
+        gt = sum(box.detection_name == name for box in gt_boxes.all)
+        pred = sum(box.detection_name == name for box in pred_boxes.all)
+        row = classes[name] = {"ground_truth": gt, "predictions": pred, "max_recall_bin": None}
+        errors = dict.fromkeys(MOTION_TP_METRICS)
+        if not gt:
+            row["status"], epa = "no_ground_truth", None
+        elif not pred:
+            row["status"], epa = "no_predictions", 0.0
+        else:
+            result = accumulate(gt_boxes, pred_boxes, name, config.dist_fcn_callable, config.dist_th_tp)
+            if isinstance(result, MotionMetricData):
+                # PR10's empty-match branch returns only metric data. All eligible boxes are false positives.
+                row["status"], epa = "no_matches", -0.5 * pred / gt
+            else:
+                data, _, epa = result
+                row["max_recall_bin"] = int(data.max_recall_ind)
+                first_bin = round(100 * config.min_recall) + 1
+                row["status"] = "below_min_recall" if data.max_recall_ind < first_bin else "scored"
+                errors = {metric: calc_tp(data, config.min_recall, metric) for metric in MOTION_TP_METRICS}
+        metrics[f"{name}_EPA"] = epa
+        metrics.update({f"{name}_{metric}": value for metric, value in errors.items()})
+    return metrics, classes
+
+
+def score_motion(dataset, rows, output, split, threshold):
+    import mmcv
+    from nuscenes.eval.common.loaders import add_center_dist, filter_eval_boxes
+    from projects.mmdet3d_plugin.datasets.evaluation.motion.motion_utils import MotionBox, load_gt, load_prediction
+
+    mmcv.dump(rows, str(output / ("results_mini.pkl" if split == "mini_val" else "results.pkl")))
+    submission = dataset.format_motion_results(rows, jsonfile_prefix=str(output), thresh=threshold)
+    nusc, config = dataset.nusc, dataset.det3d_eval_configs
+    pred, _ = load_prediction(submission, config.max_boxes_per_sample, MotionBox)
+    gt = load_gt(nusc, split, MotionBox, verbose=False, seconds=6)
+    if set(pred.sample_tokens) != set(gt.sample_tokens):
+        raise ValueError("motion prediction tokens differ from ground truth")
+
+    def filtered(boxes):
+        # The devkit infers box type from the first box, which does not exist in an entirely empty split.
+        if not boxes.all:
+            return boxes
+        return filter_eval_boxes(nusc, add_center_dist(nusc, boxes), config.class_range, verbose=False)
+
+    return _score_motion_classes(filtered(gt), filtered(pred), config)
 
 
 def json_safe_metrics(metrics):
@@ -377,9 +450,6 @@ def _score_with_nusc_root(args, nusc: Path, reference_source: str):
         threshold = float(source_mode.get("motion_threshhold", -1))
         if not source_mode.get("with_motion") or threshold != 0.2:
             raise ValueError(f"pinned Stage3 must enable motion at threshold 0.20, got {source_mode}")
-        mode = {"with_det": False, "with_tracking": False, "with_map": False,
-                "with_motion": True, "with_planning": False, "with_ego_status": False,
-                "motion_threshhold": threshold}
     else:
         mode = source_mode
         if (not all(mode[key] for key in
@@ -417,10 +487,12 @@ def _score_with_nusc_root(args, nusc: Path, reference_source: str):
         raise ValueError(f"PR10 class-ID order mismatch: det={dataset.CLASSES}, map={dataset.MAP_CLASSES}")
     rows = load_results(predictions, tokens, dataset.CLASSES, dataset.MAP_CLASSES, motion=motion_only)
     if motion_only:
-        metrics = dataset.evaluate(rows, eval_mode=mode)
-        validate_motion_metric_coverage(metrics)
+        metrics, classes = score_motion(dataset, rows, output, split, threshold)
+        validate_motion_metric_coverage(metrics, classes)
         coverage = {
             "reference_source": reference_source,
+            "classes": classes,
+            "min_recall": dataset.det3d_eval_configs.min_recall,
             **split_coverage,
             "motion_tokens": len(rows),
             "detections_with_motion": sum(len(row["img_bbox"]["boxes_3d"]) for row in rows),
@@ -464,10 +536,12 @@ def _score_with_nusc_root(args, nusc: Path, reference_source: str):
         metrics = json_safe_metrics(metrics)
 
     with metrics_path.open("x", encoding="utf-8") as file:
-        json.dump(metrics, file, indent=2, default=lambda value: value.tolist())
+        json.dump(metrics, file, indent=2, default=lambda value: value.tolist(), allow_nan=False)
     with coverage_path.open("x", encoding="utf-8") as file:
         json.dump(coverage, file, indent=2)
     if motion_only:
+        for name, row in classes.items():
+            print(name, row, {key: metrics[f"{name}_{key}"] for key in ("EPA", *MOTION_TP_METRICS)})
         print(f"PR10 Stage3 motion coverage: val={coverage['val_tokens']}, "
               f"detections={coverage['detections_with_motion']}, threshold={coverage['detection_score_threshold']}, "
               f"horizon={coverage['seconds']}s/{coverage['steps']} steps")

@@ -47,10 +47,23 @@ def load_checkpoint_agent_config(checkpoint):
         return None
     if not isinstance(metadata, dict) or metadata.get("_target_") not in AGENT_TARGETS:
         raise ValueError("checkpoint agent_config must name a supported UniDriveVLA policy")
+    profile = metadata.get("profile")
+    if (metadata["_target_"] == "unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy"
+            and isinstance(profile, dict)
+            and profile.get("name") == "nuscenes" and profile.get("frame") == "lidar"
+            and profile.get("prefix_max_len") == 3840 and len(profile.get("status_layout") or ()) == 10
+            and metadata.get("vlm_variant") == "2b" and metadata.get("canbus_sft_prompt") is False
+            and metadata.get("llm_wasp") and metadata.get("visual_wasp")):
+        if metadata.get("with_motion") is False and metadata.get("coc_language_prompt") is True:
+            profile.setdefault("inference_attn_impl", "eager")
+            profile.setdefault("compile_feature_fusion", True)
+        elif (metadata.get("with_motion") is True
+              and metadata.get("checkpoint_transition") == "nusc_2b_stage2_to_stage3"):
+            profile.setdefault("compile_feature_fusion", True)
     return metadata
 
 
-def initialize_for_inference(policy):
+def initialize_for_inference(policy, *, restore_compute_dtypes=True):
     initialize = getattr(policy, "initialize", None)
     if not callable(initialize):
         return
@@ -62,10 +75,10 @@ def initialize_for_inference(policy):
     module = _unwrap_policy(policy)
     checkpoint_path = getattr(module, "checkpoint_path", None)
     if isinstance(module, nn.Module) and checkpoint_path:
-        _restore_checkpoint_compute_parameter_dtypes(module, checkpoint_path)
+        _restore_checkpoint_compute_parameter_dtypes(module, checkpoint_path, restore=restore_compute_dtypes)
 
 
-def _restore_checkpoint_compute_parameter_dtypes(module, checkpoint_path):
+def _restore_checkpoint_compute_parameter_dtypes(module, checkpoint_path, *, restore=True):
     """Restore saved forward dtypes after strict weight loading, without changing buffers or Parameter identity."""
     from unidrivevla.distributed.checkpoint import canonical
 
@@ -104,6 +117,8 @@ def _restore_checkpoint_compute_parameter_dtypes(module, checkpoint_path):
         raise ValueError("checkpoint compute_parameter_dtypes does not match the policy's floating parameters; "
                          f"missing={sorted(missing)[:5]}, unexpected={sorted(unexpected)[:5]}")
 
+    if not restore:
+        return  # PR10 test.py loads weights into the model's original mixed dtypes.
     casts = [(parameters[name], dtype_by_name[dtype]) for name, dtype in saved.items()]
     with torch.no_grad():
         for parameter, dtype in casts:

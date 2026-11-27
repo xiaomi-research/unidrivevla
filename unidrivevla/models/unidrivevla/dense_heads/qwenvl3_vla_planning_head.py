@@ -200,6 +200,7 @@ class QwenVL3APlanningHead(nn.Module):
         official_command_text: bool = False,
         official_attention_mask: bool = False,
         perception_first_token_boundary: bool = True,
+        compile_feature_fusion: bool = False,
         cast_inference_mask: bool = True,
         processor_use_fast: Optional[bool] = None,
         cast_stream_dtype: bool = False,
@@ -503,6 +504,11 @@ class QwenVL3APlanningHead(nn.Module):
         self._cached_block_mask = None
         self._cached_block_mask_key = None
         self._cached_q_len_rounded = None
+        if compile_feature_fusion:
+            # The compiled PR10 reduction rounds at different points from successive eager BF16 operations.
+            self.adaptive_feature_fusion = torch.compile(
+                self.adaptive_feature_fusion, mode="default", fullgraph=False, dynamic=True
+            )
 
     def _get_view_token_ids(self, device):
         if self.view_token_ids is None:
@@ -637,8 +643,9 @@ class QwenVL3APlanningHead(nn.Module):
         return xy
 
     def _prefix_is_frozen(self, prefix_embs) -> bool:
-        """Nothing that trains feeds the prefix: frozen VLM, no AR loss on it, embeddings without gradient."""
+        """A frozen prefix can be cached only if its queries cannot read the expert streams."""
         return (self.cache_frozen_prefix and self.training and not prefix_embs.requires_grad and not self.enable_traj_ar
+                and (self.official_attention_mask or self.perception_first_token_boundary)
                 and not self.enable_knowledge_insulation and self.attn_implementation != "flex"
                 and not any(p.requires_grad for p in self.qwen3_vl_with_expert.qwen3_vl.language_model.parameters()))
 

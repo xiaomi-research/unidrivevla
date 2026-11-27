@@ -2,6 +2,8 @@
 # PR 10 release: unidrivevla_nusc_2b_stage2.py. 8 GPU x batch 4 x accum 4 = 128.
 # warmup_steps 125 is 500 micro-batches once profile.lr_microstep multiplies by grad_accum.
 profile:
+  inference_attn_impl: eager  # PR10 trains jointly with SDPA and decodes with eager attention
+  compile_feature_fusion: true  # PR10 fuses the BF16 camera-feature accumulation in training and evaluation
   prefix_max_len: 3840
   official_attention_mask: false  # PR10 stage2 is sdpa and masks padding; the flex mask ignores it
   official_command_text: false  # PR10 reads each sample's command instead of flattening across the batch

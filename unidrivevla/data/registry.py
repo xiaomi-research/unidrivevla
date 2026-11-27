@@ -375,6 +375,28 @@ class SequenceBatchSampler(Sampler):
         return self.batches
 
 
+class _PR10EpochLoader(DataLoader):
+    """Expose finite training epochs from the same PR10 sampler, worker queues and RNG streams."""
+
+    @property
+    def _index_sampler(self):
+        # PyTorch dispatches this stream to workers. Keep the public batch_sampler finite for callers.
+        return itertools.chain.from_iterable(itertools.repeat(self.batch_sampler))
+
+    def __len__(self):
+        return len(self.batch_sampler)
+
+    def __iter__(self):
+        if self._iterator is None:
+            self._iterator = super().__iter__()
+        for _ in range(len(self)):
+            yield next(self._iterator)
+
+    def close_epoch_stream(self):
+        # Releasing the DataLoader iterator shuts down its workers, including after an early stop.
+        self._iterator = None
+
+
 def sequence_shard(sequences, rank: int, world: int, size: Optional[int] = None):
     """Assign each complete, non-overlapping sequence to exactly one rank."""
     if world < 1 or not 0 <= rank < world:
@@ -529,7 +551,8 @@ def make_loader(dataset, params, train: bool, rank: int, world: int, sequence_sp
             group_sources=group_sources,
             source_weights=getattr(source_dataset, "source_weights", None), exact_resume=exact_resume,
             rng_mode=rng_mode)
-        return DataLoader(dataset, batch_sampler=sampler, collate_fn=collate, **kwargs)
+        loader_type = _PR10EpochLoader if pr10_rng and not exact_resume else DataLoader
+        return loader_type(dataset, batch_sampler=sampler, collate_fn=collate, **kwargs)
     if not train and sequences is not None:  # frames in time order, a contiguous run of sequences per rank
         order = [i for seq in sequences() for i in seq]
         per = math.ceil(len(order) / world)

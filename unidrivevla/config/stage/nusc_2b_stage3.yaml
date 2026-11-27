@@ -6,6 +6,7 @@ defaults:
   - _self_
 
 profile:
+  inference_attn_impl: sdpa
   motion_anchor_encoder: MotionAnchorSineEncoder
 
 agent:

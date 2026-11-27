@@ -586,6 +586,11 @@ def _check_stage3_motion_evaluator(root: Path):
     assert len(rows) == len(source.tokens)
 
     metrics = {key: 0.1 for key in MOTION_METRIC_KEYS}
+    classes = {"car": {"ground_truth": 8, "predictions": 2, "status": "scored"},
+               "pedestrian": {"ground_truth": 4, "predictions": 2, "status": "no_matches"}}
+    for key in metrics:
+        if key.startswith("pedestrian_"):
+            metrics[key] = -0.25 if key == "pedestrian_EPA" else None
     scorer_calls = []
 
     def fake_scorer(command, *, check, stdin, stdout, stderr, env):
@@ -600,6 +605,7 @@ def _check_stage3_motion_evaluator(root: Path):
             raise AssertionError("Stage3 mini version did not reach the independent PR10 scorer")
         output_dir = Path(command[command.index("--output-dir") + 1])
         (output_dir / "nuscenes_pr10_motion_metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+        (output_dir / "nuscenes_pr10_motion_coverage.json").write_text(json.dumps({"classes": classes}), encoding="utf-8")
         stdout.write(b"mock PR10 motion scorer\n")
         return SimpleNamespace(returncode=0)
 
@@ -614,11 +620,19 @@ def _check_stage3_motion_evaluator(root: Path):
         from unidrivevla.tools.score_nuscenes_pr10 import validate_motion_metric_coverage
         incomplete = dict(metrics)
         incomplete.pop("pedestrian_min_fde_err")
-        validate_motion_metric_coverage(incomplete)
+        validate_motion_metric_coverage(incomplete, classes)
     except ValueError:
         pass
     else:
         raise AssertionError("Stage3 motion metric coverage accepted a missing pedestrian FDE")
+    validate_motion_metric_coverage(dict.fromkeys(MOTION_METRIC_KEYS, 0.1))
+    for key, value in (("car_EPA", None), ("car_min_ade_err", float("nan")),
+                       ("pedestrian_min_fde_err", 0.0), ("pedestrian_EPA", 0.0)):
+        try:
+            validate_motion_metric_coverage({**metrics, key: value}, classes)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted invalid motion result {key}={value}")
 
 
 def _check_prediction_roundtrip_and_score(evaluator):

@@ -81,10 +81,11 @@ class NuScenesSource(Dataset):
     pr10_sampler_rng_compatible = True
 
     def __init__(self, info_path: str, path_root: str = "", data_root: str = "", version: str = "v1.0-trainval",
-                 occ_root: Optional[str] = None, frame: str = "ego"):
+                 occ_root: Optional[str] = None, frame: str = "ego", *, pr10_camera_order: bool = False):
         if frame not in ("ego", "lidar"):
             raise ValueError(f"nuScenes frame must be 'ego' or 'lidar', got {frame!r}")
         self.frame = frame
+        self.pr10_camera_order = pr10_camera_order
         with open(info_path, "rb") as f:
             self.infos = sorted(pickle.load(f)["infos"], key=lambda e: e["timestamp"])
         self.tokens = [info["token"] for info in self.infos]
@@ -164,7 +165,7 @@ class NuScenesSource(Dataset):
             sensor2lidar = rigid(cam["sensor2lidar_rotation"], cam["sensor2lidar_translation"])
             cameras.append(camera(view, path, cam["cam_intrinsic"], axes @ sensor2lidar, size))
         status = np.asarray(info["ego_status"], np.float32)  # CAN bus: acc (3), rotation rate (3), velocity (3), steer
-        return {
+        features = {
             "cameras": cameras,
             "history_trajectory": self.history(index),
             "ego_acceleration": status[0:3],
@@ -177,6 +178,10 @@ class NuScenesSource(Dataset):
             "coordinate_frame": self.frame,
             "native_to_ego": self.axes(info) if self.frame == "lidar" else np.eye(4),
         }
+        if self.pr10_camera_order:
+            # PR10 draws photometric parameters in the order recorded in each info's cams dict.
+            features["camera_augmentation_order"] = [CAMERAS[name] for name in info["cams"] if name in CAMERAS]
+        return features
 
     def pose_at(self, index: int, step: int, frame: Optional[str] = None):
         """Pose of the sample `step` keyframes away in the selected frame; None past the scene ends."""
@@ -300,8 +305,9 @@ def nuscenes_loader(cfg, agent, split: str):
     name = {"train": "train", "val": "val", "test": "val"}[split]
     profile = getattr(agent, "profile", None)
     frame = getattr(profile, "frame", None) or OmegaConf.select(cfg, "profile.frame") or "ego"
+    pr10_train = split == "train" and OmegaConf.select(cfg, "augment.geometry.rng_mode") == "pr10_numpy"
     return NuScenesSource(os.path.join(source.info_dir, f"nuscenes_infos_{name}.pkl"),
                           path_root=OmegaConf.select(source, "path_root") or "",
                           data_root=OmegaConf.select(source, "data_root") or "",
                           version=OmegaConf.select(source, "version") or "v1.0-trainval",
-                          occ_root=OmegaConf.select(source, "occ_root"), frame=frame)
+                          occ_root=OmegaConf.select(source, "occ_root"), frame=frame, pr10_camera_order=pr10_train)

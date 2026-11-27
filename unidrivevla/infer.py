@@ -6,10 +6,9 @@ import os
 import sys
 from pathlib import Path
 
-sys.path[0] = str(Path(__file__).resolve().parents[1])  # the package's parent, as in train.py
-
 # Keep evaluation output separate and reject reused paths before Hydra writes config files.
 if __name__ == "__main__":
+    sys.path[0] = str(Path(__file__).resolve().parents[1])  # script entry point needs the package's parent
     from unidrivevla.run_paths import prepare_run_paths
 
     prepare_run_paths("infer", sys.argv[1:])
@@ -23,7 +22,7 @@ from unidrivevla.distributed import parallelize  # noqa: E402
 from unidrivevla.train import Trainer  # noqa: E402
 
 
-def restore_checkpoint_agent_config(cfg: DictConfig, checkpoint: Path, vlm_path_override=None) -> bool:
+def restore_checkpoint_agent_config(cfg: DictConfig, checkpoint: Path, vlm_path_override=None, *, task_overrides=()) -> bool:
     metadata = load_checkpoint_agent_config(checkpoint)
     if metadata is None:
         return False
@@ -44,6 +43,17 @@ def restore_checkpoint_agent_config(cfg: DictConfig, checkpoint: Path, vlm_path_
         configured_profile = str(OmegaConf.select(cfg, "profile.name") or "")
         if data_loader == "multidomain" or (configured_profile and configured_profile != saved_profile):
             raise ValueError(f"checkpoint profile {saved_profile!r} does not match data={data_loader!r}")
+    for override in task_overrides:
+        key = str(override).split("=", 1)[0].lstrip("+")
+        if key in ("profile.inference_attn_impl", "agent.profile.inference_attn_impl"):
+            backend = OmegaConf.select(cfg, key)
+            if backend not in ("eager", "sdpa"):
+                raise ValueError("inference_attn_impl must be 'eager' or 'sdpa'")
+            if target == "unidrivevla.adapters.multidomain.MultiProfilePolicy":
+                for source in sources:
+                    agent.profiles[source["name"]].inference_attn_impl = backend
+            else:
+                agent.profile.inference_attn_impl = backend
     agent.checkpoint_path = str(checkpoint)
     agent.train_vlm = False
     agent.gradient_checkpointing = False
@@ -72,16 +82,22 @@ def main(cfg: DictConfig) -> None:
         raise FileNotFoundError(f"inference checkpoint does not exist: {ckpt}")
     from hydra.core.hydra_config import HydraConfig
 
-    vlm_path = _requested_vlm_path(cfg, HydraConfig.get().overrides.task,
-                                   os.environ.get("VLM_PRETRAINED_PATH"))
-    restore_checkpoint_agent_config(cfg, ckpt, vlm_path)
+    overrides = HydraConfig.get().overrides.task
+    vlm_path = _requested_vlm_path(cfg, overrides, os.environ.get("VLM_PRETRAINED_PATH"))
+    restore_checkpoint_agent_config(cfg, ckpt, vlm_path, task_overrides=overrides)
     trainer = Trainer(cfg)
     live = [e for e in trainer.evaluators if getattr(e, "in_process", False)]
-    if live:
+    reference = [e for e in live if getattr(e, "use_model_init_dtypes", False)]
+    ordinary = [e for e in live if e not in reference]
+    if ordinary:
         initialize_for_inference(trainer.agent)
         trainer.model = parallelize(trainer.agent, trainer.args, trainer.ctx)
-        for evaluator in live:
+        for evaluator in ordinary:
             evaluator.during_training(trainer, ckpt, "infer")
+    if reference:
+        if ordinary:
+            trainer.release_model()
+        trainer.evaluate_checkpoint_in_model_dtypes(reference, ckpt, "infer")
     trainer.model = trainer.agent = None
     for evaluator in trainer.evaluators:
         evaluator.release()

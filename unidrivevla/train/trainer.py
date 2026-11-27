@@ -22,7 +22,7 @@ import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from unidrivevla.adapters import check_policy, isolated_evaluation_state
+from unidrivevla.adapters import check_policy, initialize_for_inference, isolated_evaluation_state
 from unidrivevla.data import DevicePrefetcher, build_split, dataset_of, import_plugins, loader_name, make_loader
 from unidrivevla.data.augment import geometry
 from unidrivevla.data.registry import SequenceBatchSampler, evaluation_params
@@ -202,9 +202,14 @@ class Trainer:
             try:
                 self.train_loop()
             finally:
+                planning = getattr(self.train_loader, "planning", self.train_loader)
+                close_stream = getattr(planning, "close_epoch_stream", None)
+                if callable(close_stream):
+                    close_stream()
                 self.checkpointer.wait()
             live = [evaluator for evaluator in self.evaluators
-                    if getattr(evaluator, "in_process", False) and evaluator.on_end]
+                    if getattr(evaluator, "in_process", False) and evaluator.on_end
+                    and not getattr(evaluator, "use_model_init_dtypes", False)]
             if live:
                 with self.averaged():
                     for evaluator in live:
@@ -712,13 +717,40 @@ class Trainer:
         self.checkpointer.save(self.global_step, self.model, self.optimizer, extra, self.ema,
                                rank_state=rank_state, position=(next_epoch, extra["batch_in_epoch"]))
 
-    def finish(self) -> None:
-        suffix = self.ckpt_suffixes()[-1]
-        best = self.output_dir / f"best{suffix}.ckpt"
-        final = best if best.is_file() else self.output_dir / f"last{suffix}.ckpt"
-        # Release the GPUs before the final evaluation runs in its own processes. torch internals behind the
-        # compiled blocks keep references to the weights, so their storage is dropped explicitly; FSDP2 shards
-        # (DTensor) go with their modules.
+    def evaluate_checkpoint_in_model_dtypes(self, evaluators, checkpoint: Path, tag: str) -> None:
+        """Score one strictly loaded replica per rank, as PR10 test.py does after training."""
+        self.ctx.barrier()  # rank zero publishes the model-only checkpoint by atomic rename
+        error = None
+        try:
+            if self.agent is None:
+                agent_cfg = OmegaConf.to_container(self.cfg.agent, resolve=True)
+                agent_cfg.update(checkpoint_path=str(checkpoint), train_vlm=False, gradient_checkpointing=False,
+                                 _recursive_=False)
+                if "exact_resume" in agent_cfg:
+                    agent_cfg["exact_resume"] = False
+                self.agent = instantiate(agent_cfg)
+            initialize_for_inference(self.agent, restore_compute_dtypes=False)
+            self.model = self.agent.to(self.ctx.device)
+        except Exception as exc:
+            if self.ctx.world_size == 1:
+                raise
+            error = f"rank {self.ctx.rank}: {type(exc).__name__}: {exc}"
+        if self.ctx.world_size > 1:
+            errors = [None] * self.ctx.world_size
+            dist.all_gather_object(errors, error, group=self.ctx.gloo_group())
+            if any(errors):
+                raise RuntimeError(f"checkpoint evaluation initialization failed: {errors}")
+        # PR10 uses the PyTorch default for FP32 matmuls. Training may have enabled TF32.
+        precision = torch.get_float32_matmul_precision()
+        try:
+            torch.set_float32_matmul_precision("highest")
+            for evaluator in evaluators:
+                evaluator.during_training(self, checkpoint, tag)
+        finally:
+            torch.set_float32_matmul_precision(precision)
+
+    def release_model(self) -> None:
+        # Compiled blocks can retain weights. Drop their storage before loading the evaluation replica.
         for tensor in [*self.agent.parameters(), *self.agent.buffers()]:
             if not hasattr(tensor, "to_local"):
                 tensor.data = torch.empty(0, dtype=tensor.dtype, device=tensor.device)
@@ -734,6 +766,17 @@ class Trainer:
             if self.ctx.is_main:
                 logger.info("released GPU memory: %.2f GiB still allocated, %.2f GiB reserved",
                             torch.cuda.memory_allocated() / 2 ** 30, torch.cuda.memory_reserved() / 2 ** 30)
+
+    def finish(self) -> None:
+        suffix = self.ckpt_suffixes()[-1]
+        last = self.output_dir / f"last{suffix}.ckpt"
+        best = self.output_dir / f"best{suffix}.ckpt"
+        final = best if best.is_file() else last
+        reference = [e for e in self.evaluators if getattr(e, "use_model_init_dtypes", False) and e.on_end]
+        self.release_model()
+        if reference:
+            self.evaluate_checkpoint_in_model_dtypes(reference, last, "final")
+            self.release_model()
         self.ctx.close()
         try:
             if self.ctx.is_main:

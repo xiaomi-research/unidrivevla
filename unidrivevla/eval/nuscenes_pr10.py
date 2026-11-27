@@ -79,6 +79,7 @@ def default_pr10_bundle():
 class NuScenesPR10Evaluator(OpenLoopEvaluator):
     source = "nuscenes"
     motion_only = False
+    use_model_init_dtypes = True
 
     def __init__(self, cfg, section, output_dir: Path):
         if OmegaConf.select(cfg, "data_loader") != "nuscenes":
@@ -221,14 +222,17 @@ class NuScenesPR10Evaluator(OpenLoopEvaluator):
                                    env=env)
                 result_name = "nuscenes_pr10_motion_metrics.json" if self.motion_only else "nuscenes_pr10_metrics.json"
                 metrics = json.loads((output / result_name).read_text(encoding="utf-8"))
-                keys = (tuple(f"{name}_{metric}" for name in ("car", "pedestrian")
-                              for metric in ("EPA", "min_ade_err", "min_fde_err", "miss_rate_err"))
-                        if self.motion_only else (
-                        "img_bbox_NuScenes/NDS", "img_bbox_NuScenes/amota", "mAP_normal", "L2", "ego_status/mae")
-                        )
-                for key in keys:
-                    if not isinstance(metrics.get(key), (int, float)) or not math.isfinite(metrics[key]):
-                        raise ValueError(f"PR10 scorer did not return a finite {key}")
+                if self.motion_only:
+                    from unidrivevla.tools.score_nuscenes_pr10 import validate_motion_metric_coverage
+
+                    coverage = json.loads((output / "nuscenes_pr10_motion_coverage.json").read_text(encoding="utf-8"))
+                    if not isinstance(coverage.get("classes"), dict):
+                        raise ValueError("PR10 Stage3 scorer did not return per-class coverage")
+                    validate_motion_metric_coverage(metrics, coverage["classes"])
+                else:
+                    for key in ("img_bbox_NuScenes/NDS", "img_bbox_NuScenes/amota", "mAP_normal", "L2", "ego_status/mae"):
+                        if not isinstance(metrics.get(key), (int, float)) or not math.isfinite(metrics[key]):
+                            raise ValueError(f"PR10 scorer did not return a finite {key}")
                 self.results.append((tag, metrics))
             except Exception as exc:
                 self.results.append((tag, {"error": f"{type(exc).__name__}: {exc}; see {log}"}))
