@@ -42,11 +42,36 @@ def ego_dropout(section) -> Optional[EgoDropout]:
 
 
 def geometry(section):
-    """Draws {"flip": bool, "rotate": degrees} of a frame or sequence; None when geometric augmentation is off."""
+    """Draw a geometric transform using the configured RNG stream.
+
+    ``rng_mode=pr10_numpy`` reproduces the pinned PR10 ResizeCropFlipImage draws for the fixed nuScenes recipe,
+    including draws for fixed resize/crop/3D-rotation values. The default Python RNG preserves other recipes.
+    """
     flip, rotate = option(section, "geometry.flip_p"), option(section, "geometry.rotate_deg")
-    if not flip and not rotate:
+    rng_mode = (str(OmegaConf.select(section, "geometry.rng_mode", default="python"))
+                if section is not None else "python")
+    if rng_mode not in ("python", "pr10_numpy"):
+        raise ValueError(f"unknown geometry RNG mode {rng_mode!r}")
+    if rng_mode == "pr10_numpy" and (abs(flip - 0.5) > 1e-12 or abs(rotate - 5.4) > 1e-12):
+        raise ValueError("PR10 nuScenes geometry requires rand_flip=0.5 and rot_lim=(-5.4, 5.4)")
+    if not flip and not rotate and rng_mode != "pr10_numpy":
         return None
-    return lambda: {"flip": random.random() < flip, "rotate": random.uniform(-rotate, rotate)}
+
+    def draw():
+        if rng_mode == "pr10_numpy":
+            # Exact PR10 get_augmentation order: resize, bottom percentage, horizontal crop, flip, rotation,
+            # and 3D rotation. In this recipe the first three and the last are fixed at 0.6/0/0/0.
+            np.random.uniform(0.6, 0.6)
+            np.random.uniform(0.0, 0.0)
+            np.random.uniform(0.0, 0.0)
+            did_flip = bool(np.random.choice([0, 1]))
+            angle = float(np.random.uniform(-5.4, 5.4))
+            np.random.uniform(0.0, 0.0)
+            return {"flip": did_flip, "rotate": angle}
+        return {"flip": random.random() < flip, "rotate": random.uniform(-rotate, rotate)}
+
+    draw.rng_mode = rng_mode
+    return draw
 
 
 class FrameGeometry:

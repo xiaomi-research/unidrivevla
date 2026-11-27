@@ -258,7 +258,8 @@ def predict(model, loader, ctx) -> Optional[Dict[str, np.ndarray]]:
     mine: Dict[str, np.ndarray] = {}
     with isolated_evaluation_state(model):
         for features, _, tokens in DevicePrefetcher(loader, ctx.device):
-            mine.update(zip(tokens, model(features)["pred_traj"].float().cpu().numpy()))
+            predictions = model(features)["pred_traj"].float().cpu().numpy()
+            mine.update((token, pose) for token, pose in zip(tokens, predictions) if token is not None)
     gathered = [None] * ctx.world_size if ctx.is_main else None
     dist.gather_object(mine, gathered, dst=0, group=ctx.gloo_group())
     return {token: poses for part in gathered for token, poses in part.items()} if ctx.is_main else None

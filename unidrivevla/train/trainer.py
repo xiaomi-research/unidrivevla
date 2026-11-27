@@ -23,7 +23,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from unidrivevla.adapters import check_policy, isolated_evaluation_state
-from unidrivevla.data import DevicePrefetcher, build_split, import_plugins, loader_name, make_loader
+from unidrivevla.data import DevicePrefetcher, build_split, dataset_of, import_plugins, loader_name, make_loader
 from unidrivevla.data.augment import geometry
 from unidrivevla.data.registry import SequenceBatchSampler, evaluation_params
 from unidrivevla.distributed import DistributedContext, ResumeCheckpointer, export_model_state, gradient_sync, parallelize
@@ -223,8 +223,11 @@ class Trainer:
             seed=int(self.args.seed or 0), draw_augment=geometry(OmegaConf.select(self.cfg, "augment")),
             exact_resume=self.args.exact_resume)
         if not self.args.skip_validation:
-            self.val_loader = make_loader(build_split(self.cfg, self.agent, "val"), evaluation_params(self.cfg),
-                                          False, rank, world)
+            val_dataset = build_split(self.cfg, self.agent, "val")
+            sequence_eval = callable(getattr(dataset_of(val_dataset), "sequences", None))
+            self.val_loader = make_loader(val_dataset, evaluation_params(self.cfg), False, rank, world,
+                                          sequence_eval=sequence_eval,
+                                          pad_eval=sequence_eval and self.args.strategy == "fsdp")
         if OmegaConf.select(self.cfg, "vqa.enabled", default=False):
             from unidrivevla.data.tasks import TaskLoader
             from unidrivevla.data.vqa import build_vqa_loader
@@ -541,6 +544,8 @@ class Trainer:
             with self.averaged():
                 for features, targets, tokens in DevicePrefetcher(self.val_loader, device):
                     preds = self.model(features, targets, tokens)
+                    if tokens and all(token is None for token in tokens):
+                        continue
                     total += self.agent.compute_loss(features, targets, preds).detach().float()
                     count += 1
             sums = self.ctx.all_reduce_sum(torch.stack([total, torch.tensor(float(count), device=device)]))

@@ -199,6 +199,7 @@ class QwenVL3APlanningHead(nn.Module):
         summed_planning_loss: bool = False,
         official_command_text: bool = False,
         official_attention_mask: bool = False,
+        perception_first_token_boundary: bool = True,
         cast_inference_mask: bool = True,
         processor_use_fast: Optional[bool] = None,
         cast_stream_dtype: bool = False,
@@ -234,6 +235,9 @@ class QwenVL3APlanningHead(nn.Module):
         self.summed_planning_loss = summed_planning_loss
         self.official_command_text = official_command_text
         self.official_attention_mask = bool(official_attention_mask)
+        if type(perception_first_token_boundary) is not bool:
+            raise ValueError("perception_first_token_boundary must be a boolean")
+        self.perception_first_token_boundary = perception_first_token_boundary
         self.cast_inference_mask = cast_inference_mask
         self.system_prompt, self.user_prompt_template = select_prompts(prompt_style, action_horizon)
         self.time_beta_alpha = time_beta_alpha
@@ -552,6 +556,12 @@ class QwenVL3APlanningHead(nn.Module):
             return torch.utils.checkpoint.checkpoint(func, *args, use_reentrant=False, **kwargs)
         return func(*args, **kwargs)
 
+    def _project_action_output(self, suffix_out):
+        # The flow projection computes in FP32 even when DDP stores its parameters in BF16.
+        projection = self.action_out_proj
+        bias = projection.bias
+        return F.linear(suffix_out.float(), projection.weight.float(), None if bias is None else bias.float())
+
     def _prepare_attention_masks_4d(self, att_2d_masks):
         att_2d_masks_4d = att_2d_masks[:, None, :, :]
         return torch.where(att_2d_masks_4d, 0.0, OPENPI_ATTENTION_MASK_VALUE)
@@ -793,15 +803,26 @@ class QwenVL3APlanningHead(nn.Module):
             perception_embs      = torch.cat(parts_embs, dim=1)
             perception_pad_masks = torch.cat(parts_pad,  dim=1)
             perception_att_masks = torch.cat(parts_att,  dim=1)
-            # a block of its own, so in a dense joint mask the prompt's last token does not see it (the flex mask and
-            # inference's cached prefix do not let it either)
-            perception_att_masks[:, 0] = True
+            if self.perception_first_token_boundary:
+                perception_att_masks[:, 0] = True
         else:
             perception_embs      = torch.empty((batch_size, 0, self.vlm_hidden_size), dtype=dtype, device=device)
             perception_pad_masks = torch.empty((batch_size, 0), dtype=torch.bool, device=device)
             perception_att_masks = torch.empty((batch_size, 0), dtype=torch.bool, device=device)
 
         return perception_embs, perception_pad_masks, perception_att_masks, perception_lengths
+
+    @staticmethod
+    def _trim_prefix_ids_keep_prompt_tail(prefix_ids: torch.Tensor, max_len: int, vision_prefix_len: int):
+        """Keep all visual tokens first, then the most recent text tokens that fit the prefix cap."""
+        if prefix_ids.shape[0] <= max_len:
+            return prefix_ids
+        if vision_prefix_len < 0 or vision_prefix_len > int(prefix_ids.shape[0]):
+            return prefix_ids[-max_len:]
+        if vision_prefix_len >= max_len:
+            return prefix_ids[:max_len]
+        text_budget = max_len - vision_prefix_len
+        return torch.cat((prefix_ids[:vision_prefix_len], prefix_ids[vision_prefix_len:][-text_budget:]))
 
     def project_and_reshape_features(
         self,
@@ -1010,13 +1031,18 @@ class QwenVL3APlanningHead(nn.Module):
         gt_trajs=None,
         sample_tokens=None,
         include_coc_targets: bool = False,
+        coc_override_texts: Optional[List[str]] = None,
     ) -> DrivingBatch:
         device = img.device if img is not None else torch.device("cuda")
         b = int(img.shape[0]) if torch.is_tensor(img) else 1
         coc_enabled = bool(getattr(self, "coc_language_prompt", False))
         canbus_enabled = bool(getattr(self, "canbus_sft_prompt", False))
 
-        if include_coc_targets:
+        if coc_override_texts is not None:
+            if len(coc_override_texts) != b:
+                raise ValueError("CoC override text count must match the driving batch size")
+            coc_targets = [str(text or "").strip() for text in coc_override_texts]
+        elif include_coc_targets:
             coc_targets = self._training_coc_targets(sample_tokens, b)
         else:
             coc_targets = [""] * b
@@ -1150,7 +1176,7 @@ class QwenVL3APlanningHead(nn.Module):
             traj_labels = traj_answer_ids.masked_fill(traj_answer_mask == 0, -100)
 
         coc_answer_ids = coc_answer_mask = coc_labels = coc_answer_lens = None
-        if include_coc_targets and any(coc_targets):
+        if include_coc_targets or coc_override_texts is not None:
             from .canbus_prompt import COC_MAX_NEW_TOKENS
 
             rows, masks = [], []
@@ -1158,12 +1184,12 @@ class QwenVL3APlanningHead(nn.Module):
                 if text:
                     content_ids = tokenizer.encode(text, add_special_tokens=False)
                     suffix_ids = [im_end_id, nl_id]
-                    ids = content_ids[: COC_MAX_NEW_TOKENS - len(suffix_ids)] + suffix_ids
+                    ids = content_ids + suffix_ids
                 else:
                     ids = []
                 rows.append(torch.tensor(ids, dtype=torch.long))
                 masks.append(torch.ones(len(ids), dtype=torch.long))
-            coc_answer_lens = [row.numel() for row in rows]
+            coc_answer_lens = [min(row.numel(), COC_MAX_NEW_TOKENS) for row in rows]
             coc_answer_ids = pad_sequence(rows, batch_first=True, padding_value=tokenizer.pad_token_id).to(device)
             coc_answer_mask = pad_sequence(masks, batch_first=True, padding_value=0).to(device)
             width = COC_MAX_NEW_TOKENS
@@ -1211,6 +1237,7 @@ class QwenVL3APlanningHead(nn.Module):
         view_token_ids = self._get_view_token_ids(device)
 
         prefix_input_ids_list = []
+        vision_prefix_lens = []
 
         FIXED_PREFIX_MAX_LEN = self.prefix_max_len if self.prefix_max_len is not None else (
             5600 if num_views_per_sample > 6 else 3740)
@@ -1225,6 +1252,7 @@ class QwenVL3APlanningHead(nn.Module):
                     [vision_end_id, nl_id]
                 sample_input_ids.extend(ids)
 
+            vision_prefix_lens.append(len(sample_input_ids))
             prompt_mask = batch.tokenized_prompt_mask[b_idx].bool()
             prompt_ids = batch.tokenized_prompt[b_idx][prompt_mask].tolist()
             sample_input_ids.extend(prompt_ids)
@@ -1245,8 +1273,9 @@ class QwenVL3APlanningHead(nn.Module):
                 p_ids = prefix_input_ids_list[b_idx]
                 a_ids = answer_ids[b_idx]
                 if p_ids.shape[0] > FIXED_PREFIX_MAX_LEN:
-                    p_ids = p_ids[:FIXED_PREFIX_MAX_LEN]
-                    prompt_lens_list[b_idx] = FIXED_PREFIX_MAX_LEN
+                    p_ids = self._trim_prefix_ids_keep_prompt_tail(
+                        p_ids, FIXED_PREFIX_MAX_LEN, vision_prefix_lens[b_idx])
+                    prompt_lens_list[b_idx] = int(p_ids.shape[0])
                 full_ids_list.append(torch.cat([p_ids, a_ids], dim=0))
 
             prefix_input_ids = pad_sequence(
@@ -1263,8 +1292,19 @@ class QwenVL3APlanningHead(nn.Module):
             if curr_len < FIXED_PREFIX_MAX_LEN:
                 prefix_input_ids = F.pad(prefix_input_ids, (0, FIXED_PREFIX_MAX_LEN - curr_len), value=tokenizer.pad_token_id)
             elif curr_len > FIXED_PREFIX_MAX_LEN:
-                prefix_input_ids = prefix_input_ids[:, :FIXED_PREFIX_MAX_LEN]
-                prompt_lens_list = [min(length, FIXED_PREFIX_MAX_LEN) for length in prompt_lens_list]
+                trimmed_ids_list = []
+                for b_idx, p_ids in enumerate(prefix_input_ids_list):
+                    p_ids = self._trim_prefix_ids_keep_prompt_tail(
+                        p_ids, FIXED_PREFIX_MAX_LEN, vision_prefix_lens[b_idx])
+                    trimmed_ids_list.append(p_ids)
+                    prompt_lens_list[b_idx] = int(p_ids.shape[0])
+                prefix_input_ids = pad_sequence(
+                    trimmed_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id,
+                )
+                if prefix_input_ids.shape[1] < FIXED_PREFIX_MAX_LEN:
+                    prefix_input_ids = F.pad(
+                        prefix_input_ids, (0, FIXED_PREFIX_MAX_LEN - prefix_input_ids.shape[1]),
+                        value=tokenizer.pad_token_id)
                 truncated_mask = (prefix_input_ids == image_token_id)
                 valid_img_tokens = truncated_mask.sum().item()
                 if valid_img_tokens < image_features.shape[0]:
@@ -1420,14 +1460,13 @@ class QwenVL3APlanningHead(nn.Module):
 
         tokenizer = self.qwen3_vl_with_expert.processor.tokenizer
         im_end = tokenizer.encode("<|im_end|>", add_special_tokens=False)
-        newline = tokenizer.encode("\n", add_special_tokens=False)
-        if len(im_end) != 1 or len(newline) != 1:
-            raise RuntimeError("tokenizer must encode <|im_end|> and newline as single CoC tokens")
-        eos_ids = {int(im_end[0])}
+        if len(im_end) != 1:
+            raise RuntimeError("tokenizer must encode <|im_end|> as a single CoC token")
+        stop_ids = {int(im_end[0])}
         if getattr(tokenizer, "eos_token_id", None) is not None:
-            eos_ids.add(int(tokenizer.eos_token_id))
-        newline_id = int(newline[0])
+            stop_ids.add(int(tokenizer.eos_token_id))
         pad_id = int(tokenizer.pad_token_id)
+        stop_ids.add(pad_id)
 
         qwen = self.qwen3_vl_with_expert.qwen3_vl
         lm_head = qwen.lm_head
@@ -1437,75 +1476,89 @@ class QwenVL3APlanningHead(nn.Module):
         if bool((prompt_lens <= 0).any()) or bool((prompt_lens > prefix_out.shape[1]).any()):
             raise RuntimeError("CoC inference prompt lengths are outside the prefilled prefix")
         rows = torch.arange(batch_size, device=device)
-        base_positions = prefix_pos_ids.gather(
-            2, (prompt_lens - 1).view(1, batch_size, 1).expand(3, -1, -1)
-        ).squeeze(-1)
         next_logits = lm_head(prefix_out[rows, prompt_lens - 1].to(lm_head.weight.dtype))
 
         finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        needs_newline = torch.zeros_like(finished)
-        generated_ids, generated_masks = [], []
-        for step in range(limit):
-            active = ~(finished | needs_newline)
-            candidate = next_logits.argmax(dim=-1)
-            token_ids = torch.where(needs_newline, newline_id, candidate)
-            token_ids = torch.where(finished, pad_id, token_ids)
-            valid = ~finished
-            generated_ids.append(token_ids)
-            generated_masks.append(valid)
+        # Qwen multimodal RoPE can put an image axis beyond the final text position. PR10 starts
+        # generated tokens after the maximum prefilled position shared by all three RoPE axes.
+        cache_pos = prefix_pos_ids.max(dim=0).values.max(dim=-1).values + 1
+        generated = [[] for _ in range(batch_size)]
+        generated_att_mask = torch.zeros((batch_size, 0), dtype=torch.bool, device=device)
 
-            new_key_mask = torch.cat([prefix_pad_masks, torch.stack(generated_masks, dim=1)], dim=1)
-            attention_mask = self._inference_mask(new_key_mask[:, None, :], prefix_out.dtype)
-            token_embeds = qwen.get_input_embeddings()(token_ids[:, None])
-            step_positions = (base_positions + step + 1).unsqueeze(-1)
-            outputs, past_key_values, _ = self.qwen3_vl_with_expert.forward(
-                attention_mask=attention_mask,
-                position_ids=step_positions,
-                past_key_values=past_key_values,
-                inputs_embeds=[token_embeds, None, None],
-                use_cache=True,
-            )
+        language_config = qwen.language_model.config
+        previous_attention = language_config._attn_implementation
+        language_config._attn_implementation = self._inference_attn_impl
+        try:
+            for _ in range(limit):
+                next_token = next_logits.argmax(dim=-1)
+                step_tokens = next_token.masked_fill(finished, pad_id)
+                was_finished = finished.clone()
+                for index, token in enumerate(step_tokens.detach().cpu().tolist()):
+                    if finished[index]:
+                        continue
+                    if token in stop_ids:
+                        finished[index] = True
+                    else:
+                        generated[index].append(token)
+                if bool(finished.all()):
+                    break
 
-            was_waiting_newline = needs_newline
-            emitted_eos = torch.zeros_like(active)
-            for eos_id in eos_ids:
-                emitted_eos |= candidate.eq(eos_id)
-            just_ended = active & emitted_eos
-            room_for_newline = step + 1 < limit
-            finished = finished | was_waiting_newline | (just_ended & (not room_for_newline))
-            needs_newline = just_ended & room_for_newline
-            if bool(finished.all()):
-                break
-            next_logits = lm_head(outputs[0][:, -1].to(lm_head.weight.dtype))
+                step_embeds = qwen.get_input_embeddings()(step_tokens[:, None]).to(prefix_out.dtype)
+                step_positions = torch.stack([cache_pos[:, None]] * 3, dim=0)
+                key_mask = torch.cat([prefix_pad_masks, generated_att_mask], dim=1)[:, None, :]
+                self_mask = torch.ones((batch_size, 1, 1), dtype=torch.bool, device=device)
+                attention_mask = torch.cat([key_mask, self_mask], dim=-1)
+                attention_mask = self._inference_mask(attention_mask, prefix_out.dtype)
+                outputs, past_key_values, _ = self.qwen3_vl_with_expert.forward(
+                    attention_mask=attention_mask,
+                    position_ids=step_positions,
+                    past_key_values=past_key_values,
+                    inputs_embeds=[step_embeds, None, None],
+                    use_cache=True,
+                )
+                next_logits = lm_head(outputs[0][:, -1].to(lm_head.weight.dtype))
+                cache_pos = cache_pos + 1
+                generated_att_mask = torch.cat([generated_att_mask, (~was_finished)[:, None]], dim=1)
+        finally:
+            language_config._attn_implementation = previous_attention
 
-        ids = torch.stack(generated_ids, dim=1)
-        mask = torch.stack(generated_masks, dim=1)
-        steps = torch.arange(1, ids.shape[1] + 1, device=device, dtype=torch.long)
-        positions = base_positions.unsqueeze(-1) + steps.view(1, 1, -1)
-        return ids, mask, positions, past_key_values
+        return [tokenizer.decode(tokens, skip_special_tokens=True).strip() for tokens in generated]
 
-    def _append_coc_for_planning(self, batch, prefix_out, past_key_values, prefix_input_ids,
-                                 prefix_pad_masks, prefix_pos_ids, max_prefix_pos):
-        if not self.coc_language_prompt:
-            return prefix_input_ids, prefix_pad_masks, past_key_values, max_prefix_pos
-        coc_ids, coc_mask, coc_positions, past_key_values = self._generate_coc_tokens(
-            batch, prefix_out, past_key_values, prefix_pad_masks, prefix_pos_ids,
+    def _rebuild_planning_batch_with_coc(self, batch: DrivingBatch, coc_texts, *, hist_traj=None):
+        """Re-tokenize decoded CoC text as the assistant answer in a fresh planning prefix."""
+        return self._build_driving_batch(
+            img=batch.images,
+            command=batch.command,
+            ego_status=batch.ego_status,
+            hist_traj=hist_traj,
+            include_coc_targets=True,
+            coc_override_texts=coc_texts,
         )
-        prefix_input_ids = torch.cat([prefix_input_ids, coc_ids], dim=1)
-        prefix_pad_masks = torch.cat([prefix_pad_masks, coc_mask], dim=1)
-        valid_positions = coc_positions.masked_fill(~coc_mask[None, :, :], -1)
-        max_coc_pos = valid_positions.amax(dim=(0, 2)).unsqueeze(-1)
-        max_prefix_pos = torch.maximum(max_prefix_pos, max_coc_pos)
-        return prefix_input_ids, prefix_pad_masks, past_key_values, max_prefix_pos
 
     def _coc_language_loss(self, batch: DrivingBatch, prefix_out: torch.Tensor) -> torch.Tensor:
         """Cross-entropy of the causal sentence, read from the same prefix the planner attends to."""
-        if batch.coc_answer_lens is None:
+        answer_lens = batch.coc_answer_lens
+        if answer_lens is None and batch.coc_answer_mask is not None:
+            answer_lens = batch.coc_answer_mask.sum(dim=1).tolist()
+        if batch.coc_labels is None or answer_lens is None:
             return prefix_out.sum() * 0.0
-        rows = [(i, start - 1, length) for i, (start, length) in
-                enumerate(zip(batch.prompt_lens, batch.coc_answer_lens)) if length]
-        if not rows:
+        if torch.is_tensor(answer_lens):
+            answer_lens = answer_lens.detach().cpu().tolist()
+        if len(answer_lens) != prefix_out.shape[0]:
+            raise RuntimeError("CoC answer lengths do not match the prefix batch size")
+        active_rows = [(i, int(length)) for i, length in enumerate(answer_lens) if int(length) > 0]
+        if not active_rows:
             return prefix_out.sum() * 0.0
+        if batch.prompt_lens is None or len(batch.prompt_lens) != prefix_out.shape[0]:
+            raise RuntimeError("CoC loss needs actual per-sample prompt lengths after prefix embedding")
+        rows = []
+        for i, length in active_rows:
+            if length > batch.coc_labels.shape[1]:
+                raise RuntimeError(f"CoC answer length exceeds label width for batch row {i}")
+            start = int(batch.prompt_lens[i]) - 1
+            if start < 0 or start + length > prefix_out.shape[1]:
+                raise RuntimeError(f"CoC answer positions exceed the prefilled prefix for batch row {i}")
+            rows.append((i, start, length))
         lm_head = self.qwen3_vl_with_expert.qwen3_vl.lm_head
         # Token lengths are already known on CPU: project all valid tokens without a CUDA mask readback.
         hidden = torch.cat([prefix_out[i, start:start + length] for i, start, length in rows])
@@ -1950,8 +2003,7 @@ class QwenVL3APlanningHead(nn.Module):
             occ_out = torch.zeros((bsz, occ_len, self.vlm_hidden_size), device=actions.device, dtype=torch.float32)
             ego_out = None
 
-        suffix_out_float = suffix_out[:, -self.action_horizon:].to(dtype=torch.float32)
-        model_out = self._apply_checkpoint(self.action_out_proj, suffix_out_float)
+        model_out = self._apply_checkpoint(self._project_action_output, suffix_out[:, -self.action_horizon:])
 
         t_exp = time[:, None, None].to(dtype=torch.float32)
         pred_x_gt = x_t.to(dtype=torch.float32) - t_exp * model_out
@@ -2027,8 +2079,8 @@ class QwenVL3APlanningHead(nn.Module):
                         raise ValueError("gt_occ_dense is missing for a sample marked occupancy-valid")
                     occ_target = torch.stack(occ_target)
                 occ_target = occ_target.permute(0, 3, 1, 2).long()
-                occ_logits = self.occ_decoder(select_batch(occ_out, occ_indices).to(torch.float32))
-                loss_occ = F.cross_entropy(occ_logits, occ_target)
+                occ_logits = self.occ_decoder(select_batch(occ_out, occ_indices))
+                loss_occ = F.cross_entropy(occ_logits.float(), occ_target)
             else:
                 loss_occ = perception_embs.sum() * 0.0
             stats["loss_occ"] = self.occ_loss_weight * loss_occ
@@ -2132,33 +2184,6 @@ class QwenVL3APlanningHead(nn.Module):
         if prefix_embs.dtype != dtype:
             prefix_embs = prefix_embs.to(dtype)
 
-        source_features = raw_features if self.feature_source == "raw" else deepstack_features
-        feature_maps = self.project_and_reshape_features(
-            source_features, bsz, all_image_grids, self.feature_source
-        )
-
-        feature_maps_daf = self.prepare_for_deformable_aggregation(feature_maps)
-        if not self.feat_grad:
-            feature_maps_daf = [x.detach() for x in feature_maps_daf]
-
-        head_dtype = next(self.unified_decoder.parameters()).dtype
-        head_device = device
-
-        perception_metas = {
-            'img_metas': kwargs.get('img_metas'),
-            'timestamp': timestamp,
-            'projection_mat': projection_mat.to(device=head_device, dtype=head_dtype) if projection_mat is not None else None,
-            'image_wh': image_wh.to(device=head_device, dtype=head_dtype) if image_wh is not None else None,
-        }
-        if perception_metas['img_metas'] is None:  # no poses to carry instances across frames
-            self.reset_temporal()
-
-        stage1_outs = self.unified_decoder.forward_stage1(feature_maps_daf, perception_metas)
-
-        perception_embs, perception_pad_masks, perception_att_masks, perception_lengths = self.embed_perception(
-            bsz, device, dtype, stage1_outs
-        )
-
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_att_2d_4d = self._inference_mask(prefix_att_2d, dtype)
 
@@ -2183,8 +2208,64 @@ class QwenVL3APlanningHead(nn.Module):
             visual_pos_masks=_vis_masks,
         )
 
-        prefix_input_ids, prefix_pad_masks, past_key_values, max_prefix_pos = self._append_coc_for_planning(
-            batch, prefix_out, past_key_values, prefix_input_ids, prefix_pad_masks, prefix_pos_ids, max_prefix_pos,
+        if self.coc_language_prompt:
+            coc_texts = self._generate_coc_tokens(
+                batch, prefix_out, past_key_values, prefix_pad_masks, prefix_pos_ids,
+            )
+            batch = self._rebuild_planning_batch_with_coc(
+                batch,
+                coc_texts,
+                hist_traj=hist_traj,
+            )
+
+            # PR10 decodes text, re-tokenizes it, and prefills a fresh planning prefix.
+            # The CoC generation cache ends before the planner's rebuilt assistant answer.
+            (prefix_embs, prefix_pad_masks, prefix_att_masks, all_image_grids, prefix_input_ids,
+             deepstack_features, raw_features, prompt_only_len) = self.embed_prefix(batch)
+            if prefix_embs.dtype != dtype:
+                prefix_embs = prefix_embs.to(dtype)
+            prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+            prefix_att_2d_4d = self._inference_mask(prefix_att_2d, dtype)
+            prefix_pos_ids, _ = self.get_position_ids(prefix_input_ids, all_image_grids, prefix_pad_masks)
+            max_prefix_pos = prefix_pos_ids.max(dim=0).values.max(dim=-1, keepdim=True).values
+            _ds_embeds = deepstack_features if self.driving_deepstack and deepstack_features is not None else None
+            _vis_masks = (
+                prefix_input_ids == self.qwen3_vl_with_expert.qwen3_vl.config.image_token_id
+                if _ds_embeds is not None else None
+            )
+            (prefix_out, _, _), past_key_values, _ = self.qwen3_vl_with_expert.forward(
+                attention_mask=prefix_att_2d_4d,
+                position_ids=prefix_pos_ids,
+                past_key_values=None,
+                inputs_embeds=[prefix_embs, None, None],
+                use_cache=True,
+                deepstack_visual_embeds=_ds_embeds,
+                visual_pos_masks=_vis_masks,
+            )
+
+        source_features = raw_features if self.feature_source == "raw" else deepstack_features
+        feature_maps = self.project_and_reshape_features(
+            source_features, bsz, all_image_grids, self.feature_source
+        )
+
+        feature_maps_daf = self.prepare_for_deformable_aggregation(feature_maps)
+        if not self.feat_grad:
+            feature_maps_daf = [x.detach() for x in feature_maps_daf]
+
+        head_dtype = next(self.unified_decoder.parameters()).dtype
+        head_device = device
+        perception_metas = {
+            'img_metas': kwargs.get('img_metas'),
+            'timestamp': timestamp,
+            'projection_mat': projection_mat.to(device=head_device, dtype=head_dtype) if projection_mat is not None else None,
+            'image_wh': image_wh.to(device=head_device, dtype=head_dtype) if image_wh is not None else None,
+        }
+        if perception_metas['img_metas'] is None:  # no poses to carry instances across frames
+            self.reset_temporal()
+
+        stage1_outs = self.unified_decoder.forward_stage1(feature_maps_daf, perception_metas)
+        perception_embs, perception_pad_masks, perception_att_masks, perception_lengths = self.embed_perception(
+            bsz, device, dtype, stage1_outs
         )
 
         perception_len = perception_embs.shape[1]
@@ -2357,13 +2438,7 @@ class QwenVL3APlanningHead(nn.Module):
             use_cache=False,
         )
 
-        suffix_out = outputs_embeds[2]
-
-        suffix_out = suffix_out[:, -self.action_horizon :].to(dtype=torch.float32)
-
-        model_out = self.action_out_proj(suffix_out)
-
-        return model_out
+        return self._project_action_output(outputs_embeds[2][:, -self.action_horizon:])
 
     def forward_ar_batch(self, ar_batch):
         input_ids = ar_batch['ar_input_ids']

@@ -28,8 +28,11 @@ class OccLatentDecoder(nn.Module):
 
     def forward(self, occ_tokens):
         B = occ_tokens.shape[0]
-        latent_tokens = self.feat_proj(occ_tokens)
+        latent_tokens = self.feat_proj(occ_tokens.to(self.feat_proj.weight.dtype))
         latent_grid = rearrange(latent_tokens, 'b (h w) c -> b c 1 h w', h=25, w=25)
+        decoder_param = next(getattr(self.vae, "decoder", self.vae).parameters(), None)
+        if decoder_param is not None:
+            latent_grid = latent_grid.to(decoder_param.dtype)
         shapes = [(200, 200), (100, 100), (50, 50)]
         target_shape = (B, 1, 200, 200, 16)
         logits = self.vae.forward_decoder(z=latent_grid, shapes=shapes, input_shape=target_shape)

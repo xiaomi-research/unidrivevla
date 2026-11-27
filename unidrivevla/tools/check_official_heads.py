@@ -16,6 +16,7 @@ import sys
 import types
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
 from omegaconf import OmegaConf
@@ -24,6 +25,10 @@ PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE.parent))
 
 from unidrivevla.adapters.unidrivevla import Profile, head_kwargs  # noqa: E402
+from unidrivevla.models.models.instance_bank import InstanceBank  # noqa: E402
+from unidrivevla.models.unidrivevla.dense_heads.unified_perception_decoder import (  # noqa: E402
+    UnifiedPerceptionDecoder,
+)
 from unidrivevla.models.unidrivevla.dense_heads.qwenvl3_vla_planning_head import (  # noqa: E402
     QwenVL3APlanningHead,
 )
@@ -361,6 +366,92 @@ def compare_ar_loss_contract(main_nuscenes, main_b2d):
           "native B2D VQA/AR gradient matches main's 10x nuScenes weighting")
 
 
+def check_tracking_id_transfer():
+    class Decoder:
+        num_output = 1
+        score_threshold = 0.05
+
+        def decode(self, cls_scores, box_preds, instance_id=None, quality=None, output_idx=-1):
+            scores = cls_scores[output_idx].sigmoid().max(dim=-1).values
+            indices = scores.topk(self.num_output, dim=1, sorted=False).indices
+            mask = scores.gather(1, indices) >= self.score_threshold
+            return [{"query_indices": indices[b][mask[b]],
+                     "instance_ids": instance_id[b, indices[b][mask[b]]]}
+                    for b in range(scores.shape[0])]
+
+    def fixture(probabilities=(0.1, 0.9), labels=(0, 0), positions=(0.0, 0.1),
+                output_count=1, ids=(7, -1)):
+        decoder = UnifiedPerceptionDecoder.__new__(UnifiedPerceptionDecoder)
+        nn.Module.__init__(decoder)
+        decoder.with_instance_id = True
+        decoder.det_decoder = Decoder()
+        decoder.det_decoder.num_output = output_count
+        decoder.map_decoder = decoder.motion_decoder = None
+        bank = InstanceBank(2, 4, np.zeros((2, 11), np.float32), num_temp_instances=1)
+        bank.instance_id = torch.tensor([ids], dtype=torch.long)
+        bank.prev_id = 8
+        bank.temp_confidence = torch.tensor([probabilities], dtype=torch.float32)
+        decoder.det_instance_bank = bank
+        decoder.eval()
+        logits = torch.full((1, 2, 2), -20.0)
+        for query, (probability, label) in enumerate(zip(probabilities, labels)):
+            logits[0, query, label] = torch.logit(torch.tensor(probability))
+        anchors = torch.zeros((1, 2, 11), dtype=torch.float32)
+        anchors[0, :, 0] = torch.tensor(positions)
+        return decoder, {"det_classifications": [logits], "det_predictions": [anchors]}
+
+    decoder, outputs = fixture()
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [7],
+          "dropped same-class temporal query transfers its ID to the nearby emitted query")
+    check(decoder.det_instance_bank.instance_id.tolist() == [[7, -1]],
+          "transferred tracking ID is written back to the next-frame cache")
+
+    decoder, outputs = fixture(labels=(0, 1))
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [8],
+          "tracking ID is not transferred across classes")
+    decoder, outputs = fixture(positions=(0.0, 2.6))
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [8],
+          "tracking ID is not transferred beyond the 2.5 m radius")
+    decoder, outputs = fixture(probabilities=(0.1, 0.19))
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [8],
+          "fresh query below the 0.2 transfer threshold keeps its own ID")
+    decoder, outputs = fixture(probabilities=(0.005, 0.9))
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [8],
+          "temporal query below the 0.01 reuse threshold cannot donate its ID")
+    decoder, outputs = fixture(probabilities=(0.95, 0.9))
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [7],
+          "an emitted temporal query keeps its ID instead of transferring it")
+
+    decoder, outputs = fixture(output_count=2, ids=(7, 7), probabilities=(0.9, 0.8))
+    try:
+        decoder.post_process(outputs)
+    except RuntimeError as exc:
+        check("duplicate tracking IDs" in str(exc), "strict inference rejects duplicate output IDs")
+    else:
+        check(False, "strict inference rejects duplicate output IDs")
+
+    decoder, outputs = fixture()
+    decoder.det_instance_bank.get_instance_id = lambda *args: (_ for _ in ()).throw(RuntimeError("bad ID state"))
+    try:
+        decoder.post_process(outputs)
+    except RuntimeError as exc:
+        check("bad ID state" in str(exc), "strict inference reports ID generation failures")
+    else:
+        check(False, "strict inference reports ID generation failures")
+
+    decoder, outputs = fixture()
+    decoder.train()
+    detections, _ = decoder.post_process(outputs)
+    check(detections[0]["instance_ids"].tolist() == [8],
+          "training post-process preserves IDs without inference-only temporal transfer")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -384,6 +475,7 @@ def main():
     check(b2d_mod.B2D_USER_PROMPT_TEMPLATE == B2D_USER_PROMPT_TEMPLATE, "Bench2Drive user prompt")
     compare_prompts(ns_mod.QwenVL3APlanningHead, QwenVL3APlanningHead, "nuscenes", "ego")
     compare_prompts(b2d_mod.QwenVL3APlanningHead, QwenVL3APlanningHead, "b2d", "ego")
+    check_tracking_id_transfer()
     if FAILURES:
         print(f"{len(FAILURES)} failed")
         sys.exit(1)

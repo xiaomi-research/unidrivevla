@@ -16,8 +16,11 @@ import importlib
 import itertools
 import logging
 import math
-from typing import Any, Callable, Dict
+import random
+from functools import partial
+from typing import Any, Callable, Dict, Optional
 
+import numpy as np
 import torch
 import torch.nn.utils.rnn as rnn_utils
 from omegaconf import DictConfig, OmegaConf
@@ -28,6 +31,27 @@ logger = logging.getLogger(__name__)
 POSE_INTERVAL_S = 0.5
 LoaderFn = Callable[[Any, Any, str], Any]
 LOADERS: Dict[str, LoaderFn] = {}
+
+
+def validate_pr10_sequence_groups(infos, scene_groups):
+    """Validate the nuScenes source's scene-token groups against PR10's `sweeps == []` boundaries."""
+    groups, current = [], []
+    for index, info in enumerate(infos):
+        if "sweeps" not in info:
+            raise ValueError("PR10 sampler parity requires each nuScenes info to carry its official sweeps field")
+        try:
+            is_scene_start = index > 0 and len(info["sweeps"]) == 0
+        except TypeError as exc:
+            raise ValueError("PR10 sampler parity requires a sized sweeps field in each nuScenes info") from exc
+        if is_scene_start:
+            groups.append(current)
+            current = []
+        current.append(index)
+    if current:
+        groups.append(current)
+    if groups != scene_groups:
+        raise ValueError("nuScenes info scene_token groups differ from PR10's `sweeps == []` sampler groups")
+    return groups
 
 
 def register(name: str) -> Callable[[LoaderFn], LoaderFn]:
@@ -207,7 +231,8 @@ class SequenceBatchSampler(Sampler):
     mixture path samples source sequences by frame-weight and keeps each sequence's split parts in one slot."""
 
     def __init__(self, sequences, batch_size: int, rank: int, world: int, split: int = 2, seed: int = 0,
-                 draw=None, group_sources=None, source_weights=None, exact_resume: bool = False):
+                 draw=None, group_sources=None, source_weights=None, exact_resume: bool = False,
+                 rng_mode: Optional[str] = None):
         self.groups, self.group_parents, self.parent_groups = [], [], []
         for parent, sequence in enumerate(sequences):
             parts = self.cut(list(sequence), split)
@@ -221,6 +246,9 @@ class SequenceBatchSampler(Sampler):
         self.batches = sum(map(len, self.groups)) // self.global_batch
         self.rank, self.batch_size, self.seed, self.epoch = rank, batch_size, seed, 0
         self.exact_resume = exact_resume
+        self.rng_mode = rng_mode or getattr(draw, "rng_mode", "python")
+        if self.rng_mode not in ("python", "pr10_numpy"):
+            raise ValueError(f"unknown sequence augmentation RNG mode {self.rng_mode!r}")
         self.group_sources, self.source_sampling_weights, self.source_parents = group_sources, None, None
         if group_sources is not None:
             if len(group_sources) != len(self.parent_groups) or not source_weights:
@@ -275,9 +303,19 @@ class SequenceBatchSampler(Sampler):
             for _ in range(self.batches):
                 batch = []
                 for k, buffer in enumerate(self.buffers):
+                    # PR10's GroupInBatchSampler draws skip_prob once for every slot in every batch,
+                    # including when skip_prob=0 and the buffer is empty.
+                    skip = (np.random.uniform() < 0.0 and len(buffer) > 1) if self.rng_mode == "pr10_numpy" else False
                     if not buffer:
                         buffer.extend(self.groups[next(self.slots[k])])
+                        if self.rng_mode == "pr10_numpy":
+                            # The official sampler draws sequence_flip_prob on every refill (default 0).
+                            flip_sequence = np.random.uniform() < 0.0
+                            if flip_sequence:
+                                buffer.reverse()
                         self.augments[k] = self.draw() if self.draw is not None else None
+                    if skip:
+                        buffer.pop(0)
                     batch.append((buffer.pop(0), self.augments[k]))
                 yield batch
             return
@@ -337,6 +375,66 @@ class SequenceBatchSampler(Sampler):
         return self.batches
 
 
+def sequence_shard(sequences, rank: int, world: int, size: Optional[int] = None):
+    """Assign each complete, non-overlapping sequence to exactly one rank."""
+    if world < 1 or not 0 <= rank < world:
+        raise ValueError(f"invalid sequence shard rank/world: rank={rank}, world={world}")
+    groups, seen = [], set()
+    for scene, sequence in enumerate(sequences):
+        indices = [int(index) for index in sequence]
+        if not indices:
+            continue
+        if len(set(indices)) != len(indices) or seen.intersection(indices):
+            raise ValueError(f"sequence {scene} overlaps another sequence or repeats a frame")
+        if any(index < 0 or (size is not None and index >= size) for index in indices):
+            raise ValueError(f"sequence {scene} contains an out-of-range frame index")
+        seen.update(indices)
+        groups.append((scene, indices))
+    if size is not None and seen != set(range(size)):
+        missing = len(set(range(size)) - seen)
+        raise ValueError(f"sequence index lists cover {len(seen)} of {size} frames ({missing} missing)")
+    return groups[rank::world]
+
+
+class _SceneStreamDataset(Dataset):
+    """Attach the complete source sequence ID to each transformed frame's temporal metadata."""
+
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, sample_index):
+        padding = False
+        if isinstance(sample_index, tuple):
+            index, scene_id, padding = sample_index
+        else:
+            index, scene_id = sample_index, None
+        sample = self.dataset[index]
+        features = dict(sample[0])
+        metadata = features.get("img_metas")
+        if metadata is None:
+            metadata = {}
+        elif not isinstance(metadata, dict):
+            raise TypeError("sequence evaluation expects per-sample img_metas to be a mapping")
+        else:
+            metadata = dict(metadata)
+        stream = metadata.get("stream_id")
+        if padding:
+            metadata["stream_id"] = f"sequence_eval_padding={scene_id}"
+        elif scene_id is not None:
+            metadata["stream_id"] = f"{stream}::scene={scene_id}" if stream is not None else f"scene={scene_id}"
+        features["img_metas"] = metadata
+        sample = (features, *sample[1:])
+        if padding:
+            if len(sample) >= 3:
+                sample = (*sample[:2], None, *sample[3:])
+            else:
+                sample = (*sample, None)
+        return sample
+
+
 def dataloader_kwargs(params) -> dict:
     kwargs = OmegaConf.to_container(params, resolve=True) if isinstance(params, DictConfig) else dict(params)
     kwargs.pop("shuffle", None)
@@ -357,16 +455,64 @@ def evaluation_params(cfg) -> dict:
     return values
 
 
+def _pr10_worker_init_fn(worker_id: int, num_workers: int, rank: int, seed: int) -> None:
+    """Pinned PR10 worker seed formula; PyTorch continues to seed the worker's torch RNG itself."""
+    worker_seed = int(num_workers) * int(rank) + int(worker_id) + int(seed)
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def make_loader(dataset, params, train: bool, rank: int, world: int, sequence_split: int = 0, seed: int = 0,
-                draw_augment=None, exact_resume: bool = False) -> DataLoader:
+                draw_augment=None, exact_resume: bool = False, sequence_eval: bool = False,
+                pad_eval: bool = False) -> DataLoader:
     """Training on a source with sequences() and sequence_split > 0 feeds each batch slot consecutive frames
-    (SequenceBatchSampler, draw_augment once per sequence); otherwise samples are shuffled."""
+    (SequenceBatchSampler, draw_augment once per sequence); nuScenes sequence_eval preserves full scene histories."""
     source_dataset = dataset_of(dataset)
+    sequences = getattr(source_dataset, "sequences", None)
+    if sequence_eval:
+        if train or not callable(sequences):
+            raise ValueError("sequence_eval requires an evaluation dataset with sequences()")
+        kwargs = dataloader_kwargs(params)
+        batch_size = int(kwargs.pop("batch_size", 1))
+        if batch_size != 1:
+            raise ValueError("sequence_eval requires dataloader.eval_batch_size=1 to keep temporal cache lanes aligned")
+        kwargs.pop("drop_last", None)
+        sequence_groups = list(sequences())
+        all_shards = [sequence_shard(sequence_groups, worker, world, len(dataset)) for worker in range(world)]
+        shard = all_shards[rank]
+        samples = [(index, f"sequence={scene}", False)
+                   for scene, sequence in shard for index in sequence]
+        if pad_eval:
+            target = max(sum(len(sequence) for _, sequence in worker_shard) for worker_shard in all_shards)
+            if target:
+                fallback = next(index for worker_shard in all_shards
+                                for _, sequence in worker_shard for index in sequence)
+                samples.extend((fallback, f"rank={rank}", True) for _ in range(target - len(samples)))
+        return DataLoader(_SceneStreamDataset(dataset), sampler=samples, batch_size=1,
+                          collate_fn=collate, drop_last=False, **kwargs)
     factory = getattr(source_dataset, "make_loader", None)
     if callable(factory):
         return factory(dataset, params, train, rank, world, sequence_split=sequence_split, seed=seed,
                        draw_augment=draw_augment, exact_resume=exact_resume)
     kwargs = dataloader_kwargs(params)
+    rng_mode = getattr(draw_augment, "rng_mode", "python")
+    pr10_rng = bool(train and rng_mode == "pr10_numpy")
+    if pr10_rng:
+        if not getattr(source_dataset, "pr10_sampler_rng_compatible", False):
+            raise ValueError("pr10_numpy augmentation is only valid for the dedicated nuScenes source")
+        if not callable(sequences) or sequence_split <= 0:
+            raise ValueError("PR10 nuScenes augmentation requires the sequence batch sampler")
+        validate_groups = getattr(source_dataset, "validate_pr10_sampler_groups", None)
+        if not callable(validate_groups):
+            raise ValueError("PR10 nuScenes source must validate sampler groups against sweeps boundaries")
+        validate_groups()
+        if sequence_split != 2:
+            raise ValueError(f"PR10 nuScenes Stage-2/Stage-3 recipe requires sequence_split=2, got {sequence_split}")
+        num_workers = int(kwargs.get("num_workers") or 0)
+        # Defaults are set by the dedicated Stage-2/3 YAML. Leave explicit resource overrides intact. The reference
+        # worker_init_fn only runs in worker processes; with num_workers=0, transforms consume the seeded main RNG.
+        if num_workers > 0:
+            kwargs["worker_init_fn"] = partial(_pr10_worker_init_fn, num_workers=num_workers, rank=rank, seed=seed)
     if exact_resume:
         if int(kwargs.get("num_workers") or 0) != 0:
             raise ValueError("train.exact_resume requires dataloader.params.num_workers=0 so prefetched worker "
@@ -375,13 +521,14 @@ def make_loader(dataset, params, train: bool, rank: int, world: int, sequence_sp
     # Fixed batch shapes keep compiled graphs and cuDNN plans valid for the whole epoch.
     drop_last = bool(kwargs.pop("drop_last", train))
     weights = getattr(dataset, "sample_weights", None)
-    sequences = getattr(dataset_of(dataset), "sequences", None)
+    sequences = getattr(source_dataset, "sequences", None)
     group_sources = getattr(source_dataset, "sequence_sources", None)
     if train and sequence_split > 0 and sequences is not None and (weights is None or group_sources is not None):
         sampler = SequenceBatchSampler(
             sequences(), int(kwargs.pop("batch_size", 1)), rank, world, sequence_split, seed, draw_augment,
             group_sources=group_sources,
-            source_weights=getattr(source_dataset, "source_weights", None), exact_resume=exact_resume)
+            source_weights=getattr(source_dataset, "source_weights", None), exact_resume=exact_resume,
+            rng_mode=rng_mode)
         return DataLoader(dataset, batch_sampler=sampler, collate_fn=collate, **kwargs)
     if not train and sequences is not None:  # frames in time order, a contiguous run of sequences per rank
         order = [i for seq in sequences() for i in seq]

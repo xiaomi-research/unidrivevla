@@ -8,10 +8,27 @@ from unidrivevla.models.core.box3d import *
 from ..blocks import linear_relu_ln
 
 __all__ = [
+    "MotionAnchorSineEncoder",
     "SparseBox3DRefinementModule",
     "SparseBox3DKeyPointsGenerator",
     "SparseBox3DEncoder",
 ]
+
+
+@POSITIONAL_ENCODING.register_module()
+class MotionAnchorSineEncoder(BaseModule):
+    def __init__(self, embed_dims=256, init_cfg=None):
+        super().__init__(init_cfg)
+        self.encoder = nn.Sequential(
+            *linear_relu_ln(embed_dims, 1, 1),
+            Linear(embed_dims, embed_dims),
+        )
+
+    def forward(self, sine_embed):
+        target_dtype = next(self.encoder.parameters()).dtype
+        if sine_embed.dtype != target_dtype:
+            sine_embed = sine_embed.to(dtype=target_dtype)
+        return self.encoder(sine_embed)
 
 
 @POSITIONAL_ENCODING.register_module()

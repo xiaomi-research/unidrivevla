@@ -324,16 +324,17 @@ sed -i -E 's/\\[[:blank:]]+#.*$/\\/' "$stage1_script" &&
 bash "$stage1_script"
 ```
 
-把导出的 Hugging Face 模型和 tokenizer 目录交给下面的 Stage 2。这个流程不跑 CanBus SFT。
+把导出的 Hugging Face 模型和 tokenizer 目录交给下面的 Stage 2。这个流程不跑 CanBus SFT。这里 PR10 的 Stage 1 是 HF 导出目录；Stage 2 不是从一个 UniDriveVLA `last.ckpt` 初始化，所以不要给这条命令设置 `STAGE1_CHECKPOINT`。Stage 2 训练后生成的 native LiDAR `last.ckpt` 才是 Stage 3 和后续推理的 checkpoint。
 
 Stage 2 在 `Code/unidrivevla/` 的训练环境运行。10 维 ego 状态用于模型和监督，prompt 无 ego 文本。加载 Stage 1 的 Hugging Face 权重，训练 VLM（RESPECT 与 projector LoRA）、perception 和 action experts，motion 关闭。该 profile 的 Qwen 视觉与 AR 分支使用 FlashAttention 2，三个 experts 的联合 attention 使用 SDPA。运行前确认训练环境里已有与 CUDA/PyTorch 匹配的 FlashAttention。
 
 ```bash
 export VLM_PRETRAINED_PATH=/path/to/UniDriveVLA_Stage1_Nuscenes_2B
-export UNIDRIVE_NATIVE_ANCHORS_ROOT=/path/to/anchors  # 含 native/nuscenes
-export NUSCENES_INFOS=/path/to/infos
-export NUSCENES_PATH_ROOT=/path/to/nuscenes_repo_cwd
-export NUSCENES_ROOT=/path/to/nuscenes
+export UNIDRIVE_NATIVE_ANCHORS_ROOT=/path/to/anchors  # 含 native/nuscenes 的 det/map/motion anchors
+export NUSCENES_INFOS=/path/to/full-trainval/infos  # infos pkl 目录
+export NUSCENES_PATH_ROOT=/path/to/nuScenes-repo-root  # infos 中相对相机路径的根
+export NUSCENES_ROOT=/path/to/nuScenes/data/nuscenes  # 含 v1.0-trainval 表文件的 nuScenes 数据根
+export NUSCENES_VERSION=v1.0-trainval
 export NUSCENES_OCC_ROOT=/path/to/occ3d/gts
 export OCCWORLD_VAE_PATH=/path/to/occvae_latest.pth
 export COC_JSONL_PATH=/path/to/alpamayo_coc_train_with_nav.jsonl.gz
@@ -341,7 +342,24 @@ GPUS=8 DATA=nuscenes bash scripts/train/run_unidrivevla_train.sh \
   stage=nusc_2b_stage2 train.skip_validation=true evaluator.name=null
 ```
 
-CoC 文件也可用未压缩的 `.jsonl`，token 须匹配训练集。配方是 20 epoch，每卡 batch 4、全局 batch 128、梯度裁剪 1.0。上面是 PR #10 的 8 卡配置。在单机 4 卡上可改 `GPUS=4`，每次更新的累积步数由 4 变成 8。训练命令关闭周期验证。训练后用这一配方产出的 `last.ckpt` 跑 [PR #10 五项评分](#pr-10-的-nuscenes-五项评分)。
+CoC 文件也可用未压缩的 `.jsonl`，token 须匹配训练集。配方是 20 epoch，每卡 batch 4、全局 batch 128、梯度裁剪 1.0。Stage 2 使用固定 PR10 NumPy 随机调用顺序、每卡 8 个 worker、关闭 pinned memory 和 persistent workers；非 PR10 配方保持原来的默认数据加载行为。Stage 2 必须使用 raw LiDAR native profile，anchor 文件要与此坐标系匹配；参见 [nuScenes anchors 指南](docs/NUSCENES_ANCHORS.md)。上面是 PR #10 的 8 卡配置。在单机 4 卡上可改 `GPUS=4`，每次更新的累积步数由 4 变成 8。示例中的 `train.skip_validation=true evaluator.name=null` 跳过训练中验证及结束后的自动评分。要在训练结束时评分，配置好下文的评分环境和验证集，去掉 `evaluator.name=null`；专用配方默认只在训练结束时运行对应 evaluator。训练后得到的 `last.ckpt` 是 native LiDAR checkpoint，供 Stage 3 和后续推理使用。后续 `infer.py` 的 `agent.checkpoint_path` 必须指向这个 native `.ckpt`，不能填 Stage 1 的 HF 导出目录。
+
+PR10 Stage 3 从 Stage 2 的 UniDriveVLA checkpoint 继续，冻结 VLM 和其 adapter，关闭 CoC，启用 motion，训练 15 epoch。这里的 `STAGE2_CHECKPOINT` 是 Stage 2 训练输出中的 `last.ckpt`，不是 Stage 1 的 HF 目录。Stage 3 使用的 `motion_6.npy` 也必须存在于 checkpoint 记录的 native anchors 目录。
+
+```bash
+export STAGE2_CHECKPOINT=/path/to/actual-pr10-stage2-run/last.ckpt
+GPUS=8 DATA=nuscenes bash scripts/train/run_unidrivevla_train.sh \
+  stage=nusc_2b_stage3 train.skip_validation=true evaluator.name=null
+```
+
+命令中的新 run 目录由启动器生成；按实际 Stage 2 的 `UNIDRIVE_EXP_ROOT/<experiment_name>/last.ckpt` 填入 `STAGE2_CHECKPOINT`。上面的 Stage 2 / Stage 3 专用配方与下文通用的 `stage=stage2` 是两条不同路径：通用 Stage 2 从 Stage 1 UniDriveVLA checkpoint 起步并打开 motion，不能用来替换 PR10 的 `nusc_2b_stage2`。
+
+2027 的旧系统使用 glibc 2.27。若 `python -c "import av"` 报缺少 `GLIBC_2.28`，在当前 shell 使用机器已有的兼容 PyAV 路径，再启动 `navsim` 训练或推理。该机验证过的路径如下。
+
+```bash
+export PYTHONPATH="/data/yongkangli/UniDriveVLA/setup/public-main-stage1.SDDVGe/native_av12${PYTHONPATH:+:$PYTHONPATH}"
+python -c "import av; print(av.__version__)"  # 2027 兼容副本为 12.3.0
+```
 
 ### 通用训练配方
 
@@ -353,7 +371,7 @@ export UNIDRIVE_EXP_ROOT=/path/to/exp
 export UNIDRIVE_ANCHORS_ROOT=/path/to/anchors
 ```
 
-Stage 1 训练视觉塔和语言模型 LoRA（`r=64`，`lora_alpha=128`，目标模块 `q,k,v,o,gate,up,down`），任务是 det + map + ego，不开 motion。Stage 2 加载 stage 1 的 `last.ckpt`，打开 motion，冻结 VLM（含 LoRA），`lr=1e-4`。
+Stage 1 训练视觉塔和语言模型 LoRA（`r=64`，`lora_alpha=128`，目标模块 `q,k,v,o,gate,up,down`），任务是 det + map + ego，不开 motion。通用 `stage=stage2` 加载 Stage 1 UniDriveVLA 的 `last.ckpt`，打开 motion，冻结 VLM（含 LoRA），`lr=1e-4`。这是本仓通用配方；PR10 专用 nuScenes 配方的 HF Stage 1 → native Stage 2 → Stage 3 流程见上节。
 
 `train.global_batch=128` 时 `grad_accum = 128 / (batch_size × GPU 数)`。每卡 batch 缺省为官方的 4：8 卡累积 4 步，4 卡累积 8 步。24 GB 卡的冒烟检查显式设置 `dataloader.params.batch_size=1`；这会改变时序 batch 的组成，不能把它当作完整官方配方的等价验证。`train.global_batch=0` 沿用 `train.grad_accum`（缺省 1）。Native nuScenes / B2D 的 scheduler 按 main 的 micro-iteration 频率更新；`warmup_steps=125/250` 是以 optimizer-step 配方为参照，并按实际 `grad_accum` 转成 micro-step 数。累计 4 次时分别是 500/1000 次前向；每个累积窗口最后一个 micro-step 的 LR 用于参数更新，所以第一次更新对应 `t=3`，不是 `t=0`。累计步数随 GPU 数变化时，固定 `global_batch` 仍保持相同 warmup 样本预算。旧 ego-frame、NAVSIM 与多 profile 配方仍按 optimizer step 更新；`batch_size=1` 的 smoke 配置不会复现主配方的批内文本行为。
 
@@ -496,23 +514,71 @@ python infer.py data=navsim agent.checkpoint_path=/path/to/navsim/last.ckpt \
 
 nuScenes / Bench2Drive 的 evaluator 是开环，按本仓 main 的实际入口分别计算，结果写到 `output_dir/eval/<name>/<tag>/*_metrics.json`；重复 tag 会分配 `_run_NNN` 新目录并保留旧结果。评分子进程非零退出、缺少分数文件或分布式任一 rank 报错都会让训练/推理命令以非零码结束，具体记录在 `eval.log` / `eval_error.txt`。nuScenes strict 使用旋转自车框与原始 LiDAR 未来框；若存在 `NUSCENES_PLANNING_SEG_PKL` 或 `evaluator.seg_pkl_path` 指向的官方 segmentation PKL，还计算 main 的 loose 指标。默认寻找 `nuscenes.info_dir/planing_gt_segmentation_val`（保留官方文件名拼写）；缺少时明确标记 loose 不可用。Bench2Drive 使用当前帧经官方过滤的 actor 及 future/yaw 标签构建 ST-P3 occupancy。PhysicalAI-AV / LEAD 的 evaluator 仅计算 cache 内已标记为有效的 planning waypoint `ADE`、`FDE` 和分秒 `L2`；这些是通用开环诊断，不是官方数据集 benchmark metric。CARLA 闭环使用下面的独立官方 evaluator 入口。
 
-### PR #10 的 nuScenes 五项评分
+R06 的 nuScenes `nuscenes/planning_tables` 会在 loose segmentation 可用时写两张独立表：`UniAD` 用 1/2/3 秒处的原始时刻值，`ST-P3` 用截至 1/2/3 秒的累计平均。两表的 `samples` 都是有可用 segmentation 的预测数，部分未来轨迹仍计入分母；`L2` 单位是米，`obj_col` 和 `obj_box_col` 单位是百分比，`Avg` 是三个秒数行的平均。strict 3D-box 规划使用另一组 `strict_samples`，只计未来 6 个点完整的样本；不能把 strict 与 loose 的样本数当成同一分母。表格结构化字段在开环 metrics JSON 中；其旧扁平碰撞值仍是 0–1 比例。PR10 原评分器另在日志中打印 strict 与 UniAD / ST-P3 loose 视图，`nuscenes_pr10_coverage.json` 记录 `strict_valid_samples`、`loose_tokens_scored` 和缺失/无效栅格数。
 
-`evaluator.name=nuscenes_pr10` 启用检测、跟踪、地图、规划和 10 维 ego 状态，motion 关闭。模型环境负责推理，模型释放后由独立的 PR10 Python 环境通过原 `NuScenes3DDataset.evaluate` 打分。MMCV / MMDetection 依赖留在这个环境。准备固定 commit 的 PR10 checkout，保持 `nuScenes/projects/` 干净。沿用 Stage 2 的三个 nuScenes 路径变量。评分需要 `v1.0-trainval` 数据、`NUSCENES_INFOS` 下的 `nuscenes_infos_val.pkl`、`vad_nuscenes_infos_temporal_val.pkl`，以及官方规划 segmentation PKL。推理还需要 checkpoint 记录的模型、anchors 与 VAE 路径可访问。如果迁移了模型目录，用 `agent.vlm_path` 指向新的 Stage 1 导出目录。
+### PR #10 nuScenes：Stage 2 全量评分与 Stage 3 motion 评分
+
+本节命令使用上文专用 10 维配方的 checkpoint。公开权重 `UniDriveVLA_Stage2_Nuscenes_2B.pt`（`global_steps=3291`）属于 6 维 Base 配方，加载时需使用匹配的模型结构。它的 ego 评分只覆盖三轴加速度和三轴角速度。
+
+PR10 的 Stage 2 evaluator 对 `v1.0-trainval/val` 跑检测、跟踪、地图、规划和 10 维 ego 状态五项，要求完整 trainval 验证 split 和规划 segmentation。Stage 3 用 Stage 2 的 native LiDAR checkpoint 继续训练 motion；`nuscenes_pr10_motion` 可评 `v1.0-trainval`，也可显式选 `v1.0-mini` 做小样本验收。mini 结果不是 full-val 官方成绩，也不能与 full-val 分数直接比较。
+
+`infer.py` 是模型入口：它从 `agent.checkpoint_path` 读取 UniDriveVLA 原生 `.ckpt`，按 checkpoint 的 `agent_config` 恢复 LiDAR profile，并用当前 `NUSCENES_INFOS` / 图像文件做输入。PR10 Stage 2 训练的初始 VLM 路径是 Stage 1 的 Hugging Face 导出目录；后续 inference 的 `agent.checkpoint_path` 则必须是 Stage 2 或 Stage 3 的 `last.ckpt`，不能把 Stage 1 HF 目录填到 checkpoint 参数里。若 checkpoint 记录的 HF 模型目录已迁移，可用 `agent.vlm_path` 覆盖；checkpoint 记录的 native anchors 和 VAE 文件也必须可访问。native LiDAR checkpoint 不要改成 `nuscenes_ego` 或传 `agent.checkpoint_frame=ego`。
+
+PR10 scorer 与模型分开运行：模型推理留在现有训练环境；`NUSCENES_PR10_PYTHON` 指向独立、已有 PR10/MMCV/MMDetection/NuScenes-devkit 依赖的评分环境。不要把 MMCV 装进 `navsim` 环境。PR10 代码 checkout 是可选的：设置 `NUSCENES_PR10_ROOT` 时，必须是干净的 commit `5fce121f4bf04eaf7e109880d4f26eed62c0eed0`；不设置时，scorer 使用包内 `references/pr10_nuscenes_scorer.tar.gz`，所以安装该包后不需要另 clone PR10 源码。这个 bundle 只带 scorer 源码，不带 MMCV 或数据。
+
+两个阶段都从 `NUSCENES_INFOS/nuscenes_infos_val.pkl` 读取验证样本，按 `NUSCENES_PATH_ROOT` 解析图像路径，并用 `NUSCENES_ROOT` 下的版本表核对完整验证集。Stage 2 五项评分还需要同目录的 `vad_nuscenes_infos_temporal_val.pkl` 和 `NUSCENES_PLANNING_SEG_PKL` 指向的规划栅格（官方文件名 `planing_gt_segmentation_val`）。`VLM_PRETRAINED_PATH` 指向与训练相同的 Stage 1 Hugging Face 模型与 processor。
 
 ```bash
-export NUSCENES_PR10_ROOT=/path/to/pr10-checkout  # Git commit 5fce121f4bf04eaf7e109880d4f26eed62c0eed0
-export NUSCENES_PR10_PYTHON=/path/to/pr10-eval-env/bin/python
+# 已有的 PR10 scorer 环境；与 navsim 模型环境分开
+export NUSCENES_PR10_PYTHON=/path/to/pr10-score-env/bin/python
+# 可选：仅在使用外部 checkout 时设置；否则用包内固定 scorer bundle
+# export NUSCENES_PR10_ROOT=/path/to/pr10-checkout
+export NUSCENES_INFOS=/path/to/full-trainval/infos
+export NUSCENES_PATH_ROOT=/path/to/nuScenes-repo-root
+export NUSCENES_ROOT=/path/to/nuScenes/data/nuscenes
+export NUSCENES_VERSION=v1.0-trainval
+export UNIDRIVE_NATIVE_ANCHORS_ROOT=/path/to/anchors
+export VLM_PRETRAINED_PATH=/path/to/Stage1-HF-export
 export NUSCENES_PLANNING_SEG_PKL=/path/to/planing_gt_segmentation_val
+
+# scorer 环境的依赖预检；本命令只导入，不安装或修改环境
 env -u PYTHONPATH -u PYTHONHOME CUDA_VISIBLE_DEVICES= PYTHONNOUSERSITE=1 \
   "$NUSCENES_PR10_PYTHON" -c 'import mmcv, torch, nuscenes; from mmdet.datasets import build_dataset'
-env -u VLM_PRETRAINED_PATH python infer.py data=nuscenes evaluator.name=nuscenes_pr10 nuscenes.occ_root=null \
-  agent.checkpoint_path=/path/to/nusc_2b_stage2/last.ckpt
+
+# Stage 2 native checkpoint：完整 v1.0-trainval 五项
+python infer.py data=nuscenes evaluator.name=nuscenes_pr10 nuscenes.version=v1.0-trainval \
+  nuscenes.occ_root=null agent.checkpoint_path=/path/to/pr10-stage2/last.ckpt \
+  agent.vlm_path="$VLM_PRETRAINED_PATH"
+
+# Stage 3 native checkpoint：显式 mini motion-only；把 infos/root 换成 v1.0-mini 对应资产
+export NUSCENES_INFOS=/path/to/mini/infos
+export NUSCENES_PATH_ROOT=/path/to/nuScenes-repo-root
+export NUSCENES_ROOT=/path/to/nuScenes/data/nuscenes  # 必须包含 v1.0-mini 表文件
+export NUSCENES_VERSION=v1.0-mini
+python infer.py data=nuscenes evaluator.name=nuscenes_pr10_motion nuscenes.version=v1.0-mini \
+  nuscenes.occ_root=null agent.checkpoint_path=/path/to/pr10-stage3/last.ckpt \
+  agent.vlm_path="$VLM_PRETRAINED_PATH"
 ```
 
-使用 native Stage 2 导出的 `last.ckpt`。多卡可用 `torchrun`，按训练示例生成一组新的共享 `UNIDRIVE_RUN_ID`、`UNIDRIVE_INVOCATION_ID`。评估 batch size 固定为 1，按完整场景分给各 rank。也可将训练命令的 `evaluator.name=null` 改为 `evaluator.name=nuscenes_pr10`，在训练结束后评分。查看 `eval/nuscenes_pr10/<tag>/nuscenes_pr10_metrics.json`、`nuscenes_pr10_coverage.json` 和 `eval.log`。严格与宽松规划表见日志，覆盖数用来核实两次评估比较的是同一批样本。
+每次 `infer.py` 都在新 run 下导出 `predictions/rank-*.pt`，释放模型后再启动 CPU scorer。Stage 2 结果位于 `eval/nuscenes_pr10/<tag>/`，重点文件是 `nuscenes_pr10_metrics.json`、`nuscenes_pr10_coverage.json` 和 `eval.log`；原 PR10 evaluator 的结果/中间文件也留在该目录。Stage 3 输出 `nuscenes_pr10_motion_metrics.json`、`nuscenes_pr10_motion_coverage.json` 和 `eval.log`。Stage 2 的覆盖记录区分 `strict_valid_samples` 与 `loose_tokens_scored`；日志打印的 strict 3D-box 表只计完整 6 点未来，loose occupancy 表按有有效栅格的 token 计数。
 
-精确复用官方栅格 footprint 需要 `scikit-image==0.24.0`（已加入依赖）。运行新开环评测的环境需要具备该依赖；2031/navsim 经用户单独授权补齐四个缺包后的安装和 CPU 检查回执保存在本地任务证据目录，不能据此假设其他环境也已补齐。
+Stage 3 的 `trajs_3d` 以当前帧 LiDAR 的绝对 XY 表示，含 6 个候选、每个 12 个半秒步。原评分器对得分达到 0.20 的检测分别输出 car 和 pedestrian 的 EPA、minADE、minFDE 与 miss rate。读取 car 的 `car_min_ade_err` / `car_min_fde_err`（米）时，同时核对 EPA 和验证帧覆盖数。
+
+保存好的 predictions 也可单独重评分。下面的输出目录必须是新建空目录；不传 `--pr10-root` 时自动读取随包的固定源码 bundle：
+
+```bash
+SCORE_DIR=/path/to/new-score-dir
+mkdir -p "$SCORE_DIR"
+"$NUSCENES_PR10_PYTHON" tools/score_nuscenes_pr10.py \
+  --infos "$NUSCENES_INFOS" --data-root "$NUSCENES_ROOT" \
+  --predictions /path/to/previous-run/eval/nuscenes_pr10/infer/predictions \
+  --output-dir "$SCORE_DIR" --segmentation "$NUSCENES_PLANNING_SEG_PKL" \
+  --version v1.0-trainval
+```
+
+Stage 3 手工重评分时，把 `--version` 改成 `v1.0-mini`，并使用该 mini 数据对应的 `--infos` / `--data-root`；另外添加 `--motion-only`，且不传 segmentation。
+
+nuScenes loose 和 Bench2Drive 开环评分依赖 `scikit-image==0.24.0`。已有环境可运行 `python tools/check_planning_metrics.py` 核对与 main 的指标计算；不要为此替换或重装 `navsim` 环境里的 MMCV。
 
 NAVSIM 1.1 用 `run_pdm_score.py`，取 `average`（PDMS）。2.0 的 `navtest` 取单阶段全帧平均；有 `run_pdm_score_one_stage.py` 时用它，固定的 v2.0（`cf08b01`）则从 `run_pdm_score.py` 取 `average_all_frames`。`navtest_two_stage` 等两阶段 split 从 `run_pdm_score.py` 取官方加权结果（EPDMS）。官方标为无效的汇总会报错。周期评分用训练中的模型生成轨迹，官方脚本在 CPU 上用 replay agent 打分。训练结束和独立推理时，官方脚本从 checkpoint 加载模型，需要对应 split 的原始数据和 metric cache。`evaluator.split` 缺省 `navtest`，`evaluator.every_n_epochs=0` 只跳过周期评分，`on_end=true` 开启训练结束评分。
 

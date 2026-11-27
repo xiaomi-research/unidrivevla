@@ -1236,6 +1236,88 @@ class UnifiedPerceptionDecoder(BaseModule):
 
         return total_loss
 
+    def _track_reuse_enabled(self):
+        return bool(getattr(self, "with_instance_id", False) and not self.training)
+
+    def _track_reuse_strict(self):
+        return self._track_reuse_enabled()
+
+    def _det_output_mask(self, score):
+        """Match the query selection used by SparseBox3DDecoder.decode."""
+        num_output = min(int(self.det_decoder.num_output), score.shape[1])
+        output_mask = torch.zeros_like(score, dtype=torch.bool)
+        if num_output <= 0:
+            return output_mask
+        output_mask.scatter_(1, score.topk(num_output, dim=1, sorted=False).indices, True)
+        if self.det_decoder.score_threshold is not None:
+            output_mask &= score >= float(self.det_decoder.score_threshold)
+        return output_mask
+
+    def _reuse_temporal_instance_ids(self, det_cls, det_anchor, instance_id):
+        if not self._track_reuse_enabled():
+            return instance_id
+        if det_cls is None or det_anchor is None or instance_id is None:
+            return instance_id
+        if not hasattr(self, "det_instance_bank"):
+            return instance_id
+
+        temp_n = min(getattr(self.det_instance_bank, "num_temp_instances", 0), det_cls.shape[1])
+        if temp_n <= 0 or temp_n >= det_cls.shape[1]:
+            return instance_id
+
+        try:
+            score, label = det_cls.detach().float().sigmoid().max(dim=-1)
+            anchor_xy = det_anchor.detach().float()[..., :2]
+            output_mask = self._det_output_mask(score)
+            reused = instance_id.clone()
+            total_reused = 0
+            for batch_index in range(reused.shape[0]):
+                temporal_ids = reused[batch_index, :temp_n]
+                temporal_valid = (temporal_ids >= 0) & (score[batch_index, :temp_n] >= 0.01)
+                temporal_valid &= ~output_mask[batch_index, :temp_n]
+                fresh_valid = (reused[batch_index, temp_n:] >= 0)
+                fresh_valid &= score[batch_index, temp_n:] >= 0.2
+                fresh_valid &= output_mask[batch_index, temp_n:]
+                if temporal_valid.any() and fresh_valid.any():
+                    temporal_idx = torch.where(temporal_valid)[0]
+                    fresh_idx = torch.where(fresh_valid)[0] + temp_n
+                    distances = torch.cdist(anchor_xy[batch_index, fresh_idx], anchor_xy[batch_index, temporal_idx])
+                    same_class = label[batch_index, fresh_idx, None] == label[batch_index, temporal_idx][None]
+                    distances = torch.where(same_class, distances, distances.new_full(distances.shape, float("inf")))
+                    for fresh_order in torch.argsort(score[batch_index, fresh_idx], descending=True).tolist():
+                        distance, temporal_order = distances[fresh_order].min(dim=0)
+                        if not torch.isfinite(distance) or float(distance) > 2.5:
+                            continue
+                        old_index = temporal_idx[int(temporal_order)]
+                        new_index = fresh_idx[fresh_order]
+                        reused[batch_index, new_index] = temporal_ids[old_index]
+                        reused[batch_index, old_index] = -1
+                        distances[:, int(temporal_order)] = float("inf")
+                        total_reused += 1
+
+                output_ids = reused[batch_index, output_mask[batch_index]]
+                output_ids = output_ids[output_ids >= 0]
+                if output_ids.unique().numel() != output_ids.numel():
+                    raise RuntimeError("duplicate tracking IDs in decoder output queries")
+
+            if total_reused:
+                self.det_instance_bank.update_instance_id(reused, score)
+            self._track_reuse_calls = getattr(self, "_track_reuse_calls", 0) + 1
+            self._track_reuse_total = getattr(self, "_track_reuse_total", 0) + total_reused
+            if self._track_reuse_calls % 500 == 0:
+                print(
+                    "[UniDriveVLA] track id reuse: "
+                    f"calls={self._track_reuse_calls}, reused={self._track_reuse_total}, "
+                    "duplicate_output_ids=0",
+                    flush=True,
+                )
+            return reused
+        except Exception as exc:
+            if self._track_reuse_strict():
+                raise
+            print(f"[UniDriveVLA] track id reuse disabled after error: {exc}", flush=True)
+            return instance_id
+
     def post_process(self, stage2_outs):
         det_result = None
         map_result = None
@@ -1260,7 +1342,13 @@ class UnifiedPerceptionDecoder(BaseModule):
                             det_pred_list[-1],
                             self.det_decoder.score_threshold
                         )
+                        instance_id = self._reuse_temporal_instance_ids(
+                            det_cls_list[-1], det_pred_list[-1], instance_id
+                        )
                     except Exception as e:
+                        if self._track_reuse_strict():
+                            raise
+                        print(f"[UniDriveVLA] instance ID generation failed: {e}", flush=True)
                         instance_id = None
 
                 det_result = self.det_decoder.decode(

@@ -1,17 +1,20 @@
 """Check SDPA/frozen-prefix masks against the original main Flex segment predicate on CPU."""
 
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 
 from unidrivevla.models.unidrivevla.dense_heads.qwenvl3_vla_planning_head import (
     QwenVL3APlanningHead,
 )
 from unidrivevla.models.unidrivevla.dense_heads.utils import make_att_2d_masks
+from torch import nn
 
 
 def main_flex_predicate(prefix_len, perception_len, suffix_len, prompt_only_len, device):
@@ -101,7 +104,64 @@ def main():
     assert all(torch.equal(actual_grad, expected_grad) for actual_grad, expected_grad in zip(actual_grads, expected_grads))
 
     canonical_out, _ = attention_and_grad(canonical, q, k, v)
-    assert (actual_out - canonical_out).abs().max().item() > 1e-4, "PAD visibility no longer affects attention"
+    valid_queries = torch.cat([prefix_pad, perception_pad, suffix_pad], dim=1)[:, None, :, None].expand_as(actual_out)
+    assert torch.isfinite(canonical_out[valid_queries]).all()
+    assert (actual_out[valid_queries] - canonical_out[valid_queries]).abs().max().item() > 1e-4, \
+        "PAD visibility no longer affects valid-query attention"
+
+    # The explicit head/profile setting controls the first perception segment mark.
+    stage1_outs = {
+        "det_instance_feature": torch.zeros(1, 2, 4),
+        "det_predictions": [torch.zeros(1, 2, 4)],
+    }
+
+    def perception_marks(*, prompt_style, coordinate_frame, implementation, official_mask, boundary=True,
+                         coc_prompt=False):
+        probe = QwenVL3APlanningHead.__new__(QwenVL3APlanningHead)
+        nn.Module.__init__(probe)
+        probe.vlm_hidden_size = 4
+        probe.det_proj_up = nn.Linear(4, 4, bias=False)
+        probe.unified_decoder = types.SimpleNamespace(
+            query_select={"det"}, det_anchor_encoder=nn.Identity(),
+        )
+        probe.use_occ_tokens = False
+        probe.prompt_style = prompt_style
+        probe.coordinate_frame = coordinate_frame
+        probe.attn_implementation = implementation
+        probe.official_attention_mask = official_mask
+        probe.perception_first_token_boundary = boundary
+        probe.coc_language_prompt = coc_prompt
+        return probe.embed_perception(1, torch.device("cpu"), torch.float32, stage1_outs)[2]
+
+    pr10_stage2 = perception_marks(
+        prompt_style="nuscenes", coordinate_frame="lidar", implementation="sdpa", official_mask=False,
+        boundary=False, coc_prompt=True,
+    )
+    assert not pr10_stage2.any(), "PR10 Stage 2 added an extra perception segment mark"
+    pr10_stage3 = perception_marks(
+        prompt_style="nuscenes", coordinate_frame="lidar", implementation="sdpa", official_mask=False,
+        boundary=False, coc_prompt=False,
+    )
+    assert not pr10_stage3.any(), "Stage 3 did not inherit the PR10 joint-attention grouping"
+    config_root = Path(__file__).resolve().parents[1] / "config"
+    stage2_cfg = OmegaConf.load(config_root / "stage" / "nusc_2b_stage2.yaml")
+    stage3_cfg = OmegaConf.load(config_root / "stage" / "nusc_2b_stage3.yaml")
+    stage3_composed = OmegaConf.merge(stage2_cfg, stage3_cfg)
+    assert stage2_cfg.profile.perception_first_token_boundary is False
+    assert stage3_composed.profile.perception_first_token_boundary is False
+    assert stage3_composed.agent.coc_language_prompt is False
+    for scope in (
+        ("nuscenes", "lidar", "sdpa", False, True),  # explicit legacy/no-CoC profile behavior
+        ("nuscenes", "ego", "sdpa", False, True),
+        ("nuscenes", "lidar", "sdpa", True, True),
+        ("b2d", "lidar", "sdpa", False, True),
+        ("lead_pr10", "ego", "eager", False, True),
+    ):
+        existing = perception_marks(
+            prompt_style=scope[0], coordinate_frame=scope[1], implementation=scope[2],
+            official_mask=scope[3], boundary=scope[4],
+        )
+        assert existing[0, 0], f"legacy profile lost its configured perception boundary {scope!r}"
 
     # The original Flex predicate excludes trajectory-answer keys from later segments.
     answer_mask = head._official_flex_attention_mask(
@@ -112,7 +172,7 @@ def main():
     )
     assert torch.equal(answer_mask, answer_expected)
     assert not answer_mask[0, fixed_cap, 4:fixed_cap].any()
-    print("official Flex segment mask, PAD visibility, cap boundary, and SDPA gradients passed")
+    print("official Flex mask, explicit Stage 2/3 perception grouping, PAD visibility, cap boundary, and SDPA gradients passed")
 
 
 if __name__ == "__main__":

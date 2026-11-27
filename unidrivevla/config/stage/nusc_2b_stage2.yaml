@@ -5,7 +5,12 @@ profile:
   prefix_max_len: 3840
   official_attention_mask: false  # PR10 stage2 is sdpa and masks padding; the flex mask ignores it
   official_command_text: false  # PR10 reads each sample's command instead of flattening across the batch
+  perception_first_token_boundary: false  # match PR10 joint attention groups; Stage 3 inherits this setting
+augment:
+  geometry:
+    rng_mode: pr10_numpy
 agent:
+  checkpoint_frame: lidar  # the main nuScenes Stage 1 checkpoint uses raw LiDAR axes
   train_vlm: true
   with_motion: false
   lr: 2.0e-4
@@ -35,5 +40,13 @@ train:
 dataloader:
   params:
     batch_size: 4
+    num_workers: 8
+    pin_memory: false
+    persistent_workers: false
 vqa:
   enabled: false
+
+evaluator:
+  name: nuscenes_pr10
+  every_n_epochs: 0
+  on_end: true

@@ -590,6 +590,9 @@ def _check_checkpoint_frame_compatibility(profile):
             checkpoint_frame = {"b2d": "ego"}
             profiles = profile_objects
             loaded = False
+            _shared_adapter_options = dict.fromkeys(("visual_lora", "visual_wasp", "visual_projector_wasp", "llm_wasp"))
+            _lora_options = None
+            _check_checkpoint_options = MultiProfilePolicy._check_checkpoint_options
 
             def _load_multidomain_state(self, state, checkpoint, strict=False):
                 self.loaded = True

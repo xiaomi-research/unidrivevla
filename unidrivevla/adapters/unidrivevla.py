@@ -62,6 +62,7 @@ class Profile:
     ground_height: float = 0.0
     reverse_classes: List[str] = field(default_factory=list)  # yaw and yaw + pi are both right (cls_allow_reverse)
     yawless_classes: List[str] = field(default_factory=list)  # no yaw regression (cls_wise_reg_weights)
+    motion_anchor_encoder: Optional[str] = None  # legacy default is SparseBox3DEncoder; Stage3 PR10 selects sine
     occ_classes: Optional[int] = None
     occ_format: Optional[str] = None
     prefix_max_len: Optional[int] = None
@@ -82,6 +83,7 @@ class Profile:
     summed_planning_loss: bool = False  # true: Bench2Drive's sum returned as `loss` too, those terms counted twice
     official_command_text: bool = False  # true: the official heads' command.view(-1) read of the one-hot in the prompt
     official_attention_mask: bool = False  # main's padding-key visibility in Flex attention; opt-in for native profiles
+    perception_first_token_boundary: bool = True  # legacy group boundary before perception; PR10 nusc SDPA disables it
     processor_use_fast: Optional[bool] = None  # Bench2Drive loads the processor with use_fast=False
     cast_stream_dtype: bool = False  # Bench2Drive casts a single-stream embed to the expert dtype
     nan_to_num_cost: bool = False  # Bench2Drive's map matcher
@@ -108,6 +110,9 @@ class Profile:
             raise ValueError("profile.commands and profile.command_prompts differ in length")
         if profile.frame not in ("ego", "lidar"):
             raise ValueError(f"profile.frame must be 'ego' or 'lidar', got {profile.frame!r}")
+        if profile.motion_anchor_encoder not in (None, "SparseBox3DEncoder", "MotionAnchorSineEncoder"):
+            raise ValueError("profile.motion_anchor_encoder must be null, SparseBox3DEncoder, or "
+                             "MotionAnchorSineEncoder")
         return profile
 
     def command_id(self, name: str) -> int:
@@ -454,6 +459,9 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
     attn = lambda dims: dict(type="MultiheadFlashAttention", embed_dims=dims, num_heads=groups, batch_first=True, dropout=drop)  # noqa: E731
     size_clamp = profile.box_size_clamp
     from_anchor = profile.keypoint_from_anchor
+    motion_anchor_encoder = profile.motion_anchor_encoder or "SparseBox3DEncoder"
+    if motion_anchor_encoder not in ("SparseBox3DEncoder", "MotionAnchorSineEncoder"):
+        raise ValueError(f"unsupported profile.motion_anchor_encoder {motion_anchor_encoder!r}")
     queries = ["det", "map", "ego"] + (["motion"] if with_motion else [])  # the official stage 2 adds the motion task
     zero_velocity = dict(class_names=list(profile.det_classes), zero_velocity_classes=list(profile.zero_velocity_classes)) \
         if profile.zero_velocity_classes else {}
@@ -529,8 +537,12 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         motion_anchor=os.path.join(anchors, "motion_6.npy"),
     )
     if with_motion:
-        decoder.update(motion_anchor_encoder=dict(type="SparseBox3DEncoder", vel_dims=3, embed_dims=[128, 32, 32, 64],
-                                                  mode="cat", output_fc=False, in_loops=1, out_loops=4))
+        if motion_anchor_encoder == "MotionAnchorSineEncoder":
+            decoder["motion_anchor_encoder"] = dict(type=motion_anchor_encoder, embed_dims=embed_dims)
+        else:
+            decoder["motion_anchor_encoder"] = dict(type=motion_anchor_encoder, vel_dims=3,
+                                                    embed_dims=[128, 32, 32, 64], mode="cat",
+                                                    output_fc=False, in_loops=1, out_loops=4)
         if profile.name == "nuscenes" and profile.frame == "lidar":
             # Main's nuScenes stage-2 inference adds per-detection agent motion. This has no learned state; the
             # dataset/frame gate keeps B2D and legacy ego-frame checkpoints on their existing output contract.
@@ -573,6 +585,7 @@ def head_kwargs(profile: Profile, vlm_path: str, vae_path: Optional[str], train_
         detach_plan_geometry=profile.detach_plan_geometry, summed_planning_loss=profile.summed_planning_loss,
         official_command_text=profile.official_command_text,
         official_attention_mask=profile.official_attention_mask,
+        perception_first_token_boundary=getattr(profile, "perception_first_token_boundary", True),
         cast_inference_mask=profile.cast_inference_mask, processor_use_fast=profile.processor_use_fast,
         cast_stream_dtype=profile.cast_stream_dtype,
     )
@@ -745,6 +758,151 @@ def _checkpoint_profile_config(checkpoint, profile_name=None):
     return None
 
 
+def _checkpoint_model_state(checkpoint):
+    """Read native state_dict or the official DeepSpeed ``module`` state without unpickling arbitrary objects.
+
+    Main UniDriveVLA checkpoints name the detector root ``planning_head``; this adapter names it ``head``. The
+    only model-key migration performed here is that explicit prefix mapping (plus a leading DDP ``module.``).
+    """
+    if not isinstance(checkpoint, dict):
+        raise TypeError("checkpoint must be a weights-only mapping")
+    if "state_dict" in checkpoint:
+        state = checkpoint["state_dict"]
+    elif isinstance(checkpoint.get("module"), dict):
+        state = checkpoint["module"]
+    else:
+        state = checkpoint
+    if isinstance(state, dict) and set(state) == {"module"} and isinstance(state["module"], dict):
+        state = state["module"]
+    if not isinstance(state, dict) or not state:
+        raise TypeError("checkpoint does not contain a non-empty state_dict or DeepSpeed module mapping")
+
+    normalized = {}
+    for raw_key, value in state.items():
+        if not isinstance(raw_key, str):
+            raise TypeError(f"checkpoint model key must be a string, got {type(raw_key).__name__}")
+        key = raw_key
+        while key.startswith("module."):
+            key = key[len("module."):]
+        if key.startswith("planning_head."):
+            key = "head." + key[len("planning_head."):]
+        if key in normalized:
+            raise ValueError(f"checkpoint keys collide after prefix normalization: {raw_key!r} -> {key!r}")
+        if not torch.is_tensor(value):
+            raise TypeError(f"checkpoint model entry {raw_key!r} is not a tensor")
+        normalized[key] = value
+    return normalized
+
+
+_STAGE3_CHECKPOINT_TRANSITION = "nusc_2b_stage2_to_stage3"
+
+
+def _plain_config_value(value):
+    if isinstance(value, DictConfig):
+        return OmegaConf.to_container(value, resolve=True)
+    if isinstance(value, dict):
+        return {key: _plain_config_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_config_value(item) for item in value]
+    return value
+
+
+def _validate_stage3_checkpoint_config(policy, checkpoint, source_motion, strict=False):
+    """Guard only the named PR10 Stage2->Stage3 migration; generic fine-tuning stays configurable.
+
+    Main DeepSpeed exports without ``agent_config`` retain their explicit source-frame path in
+    ``_check_checkpoint_frames`` and skip this native recipe-metadata comparison. Absolute VLM/VAE/anchor paths are
+    storage locations, not model identity: relocated assets are allowed, but their tokenizer and baseline contents
+    must remain identical. Strict state loading restores tensor weights; the newly introduced motion anchor still
+    depends on the Stage3 anchor file's verified contents.
+    """
+    transition = getattr(policy, "checkpoint_transition", None)
+    if transition is None:
+        return
+    if transition != _STAGE3_CHECKPOINT_TRANSITION:
+        raise ValueError(f"unknown checkpoint_transition {transition!r}")
+    profile = policy.profile
+    options = getattr(policy, "_checkpoint_stage3_options", {})
+    if (profile.name != "nuscenes" or profile.frame != "lidar" or not policy.with_motion
+            or policy.train_vlm or policy.lr != 1e-4 or policy.coc_language_prompt
+            or policy.coc_language_loss_weight != 0.0 or policy.coc_jsonl_path
+            or policy.coc_planning_loss_weight != 0.0 or profile.prefix_max_len != 3840
+            or profile.official_attention_mask or profile.official_command_text or not profile.lr_microstep
+            or options.get("attn_implementation") != "sdpa"
+            or profile.motion_anchor_encoder != "MotionAnchorSineEncoder"):
+        raise ValueError("nusc_2b_stage2_to_stage3 requires the frozen nuScenes Stage3 recipe, motion encoder, "
+                         "and CoC disabled")
+    saved_agent = checkpoint.get("agent_config") if isinstance(checkpoint, dict) else None
+    if source_motion and not strict:
+        raise ValueError("the dedicated Stage2-to-Stage3 training initializer expects a motion-free Stage2 checkpoint; "
+                         "use exact-resume/DCP for a same-stage training resume")
+    if saved_agent is None:
+        # Old main DeepSpeed checkpoints carry no native agent_config; their structure and explicit frame are checked
+        # by the regular loader, but no recipe metadata can be compared. In training mode, the dedicated transition
+        # above still requires a motion-free Stage2 source.
+        return
+    if not isinstance(saved_agent, dict):
+        raise TypeError("Stage3 continuation requires checkpoint agent_config to be a mapping")
+    if saved_agent.get("_target_") != "unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy":
+        raise ValueError("Stage3 continuation source must be a single-profile UniDriveVLAPolicy checkpoint")
+    source_profile_cfg = saved_agent.get("profile")
+    if not isinstance(source_profile_cfg, dict):
+        raise ValueError("Stage3 continuation checkpoint agent_config lacks a resolved profile")
+    source_profile = Profile.from_config(source_profile_cfg)
+    for field in fields(Profile):
+        name = field.name
+        if name == "anchors_dir":
+            continue  # the path may move; Stage3's anchor files still need the verified same baseline contents
+        if name == "motion_anchor_encoder":
+            if not source_motion and source_profile.motion_anchor_encoder not in (
+                    None, "SparseBox3DEncoder", profile.motion_anchor_encoder):
+                raise ValueError("Stage2 checkpoint motion_anchor_encoder is not a supported Stage2 source setting")
+            if source_motion and source_profile.motion_anchor_encoder != profile.motion_anchor_encoder:
+                raise ValueError("Stage3 checkpoint motion_anchor_encoder differs from the Stage3 target")
+            continue  # Stage2's branch is new; Stage3 strict evaluation must match its encoder.
+        if name == "official_command_text" and strict and source_motion \
+                and source_profile.official_command_text and not profile.official_command_text:
+            continue  # serve.py explicitly disables the training batch's legacy one-hot flatten prompt.
+        if getattr(source_profile, name) != getattr(profile, name):
+            raise ValueError(f"Stage3 continuation profile mismatch at {name}: "
+                             f"checkpoint={getattr(source_profile, name)!r}, target={getattr(profile, name)!r}")
+
+    expected_source = ({
+        "train_vlm": False, "with_motion": True, "lr": 1.0e-4,
+        "coc_language_prompt": False, "coc_language_loss_weight": 0.0,
+        "coc_planning_loss_weight": 0.0,
+    } if source_motion else {
+        "train_vlm": True, "with_motion": False, "lr": 2.0e-4,
+        "coc_language_prompt": True, "coc_language_loss_weight": 0.1,
+        "coc_planning_loss_weight": 0.0,
+    })
+    for name, expected in expected_source.items():
+        actual = saved_agent.get(name)
+        if isinstance(expected, float):
+            matches = isinstance(actual, (int, float)) and math.isclose(float(actual), expected,
+                                                                          rel_tol=0.0, abs_tol=1e-12)
+        else:
+            matches = actual == expected
+        if not matches:
+            raise ValueError(f"Stage3 continuation source is not the PR10 Stage2 recipe at {name}: "
+                             f"checkpoint={actual!r}, expected={expected!r}")
+
+    same_agent_fields = [
+        "weight_decay", "warmup_steps", "warmup_start", "min_lr_ratio", "vlm_lr_mult", "vlm_variant",
+        "gradient_checkpointing", "cache_frozen_prefix", "attn_implementation", "canbus_sft_prompt",
+        "lora", "visual_lora", "visual_wasp", "llm_wasp", "visual_projector_wasp",
+    ]
+    # infer.py/serve.py deliberately turn activation checkpointing off for a strict live evaluation.
+    if strict and source_motion:
+        same_agent_fields.remove("gradient_checkpointing")
+    for name in same_agent_fields:
+        expected = _plain_config_value(options.get(name))
+        actual = _plain_config_value(saved_agent.get(name))
+        if actual != expected:
+            raise ValueError(f"Stage3 continuation adapter/model config mismatch at agent.{name}: "
+                             f"checkpoint={actual!r}, target={expected!r}")
+
+
 def _check_checkpoint_frames(checkpoint, profiles, require_all=False, checkpoint_frame=None):
     """Reject checkpoint/profile coordinate mismatches, requiring provenance for legacy native checkpoints."""
     if isinstance(checkpoint_frame, dict):
@@ -796,7 +954,8 @@ class UniDriveVLAPolicy(nn.Module):
                  lora: Optional[Dict] = None, with_motion: bool = False, checkpoint_path: Optional[str] = None,
                  attn_implementation: str = "flex", gradient_checkpointing: bool = True,
                  cache_frozen_prefix: bool = False, shared_runtime=None,
-                 checkpoint_frame: Optional[str] = None, vlm_variant: str = "2b",
+                 checkpoint_frame: Optional[str] = None, checkpoint_transition: Optional[str] = None,
+                 vlm_variant: str = "2b",
                  visual_lora: Optional[Dict] = None, visual_wasp: Optional[Dict] = None,
                  llm_wasp: Optional[Dict] = None, visual_projector_wasp: Optional[Dict] = None,
                  canbus_sft_prompt: bool = False, coc_language_prompt: bool = False,
@@ -812,8 +971,35 @@ class UniDriveVLAPolicy(nn.Module):
         self.checkpoint_path = checkpoint_path
         if checkpoint_frame not in (None, "ego", "lidar"):
             raise ValueError("checkpoint_frame must be null, 'ego', or 'lidar'")
+        if checkpoint_transition not in (None, _STAGE3_CHECKPOINT_TRANSITION):
+            raise ValueError(f"unsupported checkpoint_transition {checkpoint_transition!r}")
         self.checkpoint_frame = checkpoint_frame
+        self.checkpoint_transition = checkpoint_transition
+        self.train_vlm = bool(train_vlm)
         self.with_motion = bool(with_motion)
+        self.coc_language_prompt = bool(coc_language_prompt)
+        self.coc_language_loss_weight = coc_language_loss_weight
+        self.coc_jsonl_path = coc_jsonl_path or ""
+        self.coc_planning_loss_weight = float(coc_planning_loss_weight)
+        self._checkpoint_stage3_options = {
+            "weight_decay": weight_decay,
+            "warmup_steps": warmup_steps,
+            "warmup_start": warmup_start,
+            "min_lr_ratio": min_lr_ratio,
+            "vlm_lr_mult": vlm_lr_mult,
+            "vlm_variant": vlm_variant,
+            "gradient_checkpointing": bool(gradient_checkpointing),
+            "cache_frozen_prefix": bool(cache_frozen_prefix),
+            "attn_implementation": attn_implementation,
+            "canbus_sft_prompt": bool(canbus_sft_prompt),
+            "vlm_path": str(vlm_path),
+            "vae_path": vae_path,
+            "lora": lora,
+            "visual_lora": visual_lora,
+            "visual_wasp": visual_wasp,
+            "llm_wasp": llm_wasp,
+            "visual_projector_wasp": visual_projector_wasp,
+        }
         head_cls = register_modules()
         self.head = head_cls(**head_kwargs(
             self.profile, vlm_path, vae_path, train_vlm, with_motion, attn_implementation,
@@ -834,53 +1020,45 @@ class UniDriveVLAPolicy(nn.Module):
                 raise ValueError("inference requires a complete checkpoint_path")
             return
         checkpoint = torch.load(self.checkpoint_path, map_location="cpu", weights_only=True)
-        state = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
-        if not isinstance(state, dict):
-            raise TypeError(f"{self.checkpoint_path} does not contain a state dict")
+        state = _checkpoint_model_state(checkpoint)
         profile = getattr(self, "profile", None)
         if isinstance(profile, Profile):
             _check_checkpoint_frames(checkpoint, {profile.name: profile}, checkpoint_frame=self.checkpoint_frame)
-        state = {str(key).removeprefix("module."): value for key, value in state.items()}
-        if strict:
-            self.load_state_dict(state, strict=True)
-            return
         own = self.state_dict()
         source_motion_keys = {key for key in state if _motion_only_key(key)}
         source_motion = _checkpoint_motion_value(checkpoint, state, source_motion_keys)
         own_motion_keys = {key for key in own if _motion_only_key(key)}
         target_motion = bool(getattr(self, "with_motion", own_motion_keys))
+        _validate_stage3_checkpoint_config(self, checkpoint, source_motion, strict=strict)
         if source_motion and not target_motion:
             raise ValueError("cannot initialize a motion-enabled checkpoint into a motion-disabled policy")
         transition = not source_motion and target_motion
-        if any(key in state and not torch.is_tensor(state[key]) for key in own):
-            raise TypeError("checkpoint model state contains a non-tensor model value")
-        loaded = {}
-        for key, value in state.items():
-            if key in ("_unidrivevla_with_motion", "_multidomain_with_motion"):
-                continue
-            if key not in own:
-                continue
-            if not torch.is_tensor(value):
-                raise TypeError(f"checkpoint tensor {key!r} is not a tensor")
+        if strict and transition:
+            raise RuntimeError("strict loading requires a complete checkpoint; motion-branch initialization is "
+                               "allowed only for non-strict training startup")
+        marker_keys = {"_unidrivevla_with_motion", "_multidomain_with_motion"}
+        loaded = {key: value for key, value in state.items() if key not in marker_keys}
+        if not loaded:
+            raise KeyError(f"{self.checkpoint_path} holds none of the model's tensors")
+        unexpected = set(loaded) - set(own)
+        if unexpected:
+            raise KeyError(f"checkpoint contains unexpected model tensors {sorted(unexpected)[:5]}")
+        for key, value in loaded.items():
             if value.shape != own[key].shape:
                 raise RuntimeError(f"checkpoint tensor {key} has shape {tuple(value.shape)}, expected "
                                    f"{tuple(own[key].shape)}")
-            loaded[key] = value
-        if not loaded:
-            raise KeyError(f"{self.checkpoint_path} holds none of the model's tensors")
         missing = set(own) - set(loaded)
         allowed_missing = own_motion_keys if transition else set()
         if missing != allowed_missing:
             bad_missing = sorted(missing - allowed_missing)
-            unexpected_motion = sorted(source_motion_keys - set(own))
             raise KeyError(f"checkpoint is incomplete for this policy; missing required model tensors "
-                           f"{bad_missing[:5]}, unexpected motion tensors {unexpected_motion[:5]}")
+                           f"{bad_missing[:5]}, missing_motion_tensors={len(missing & own_motion_keys)}")
         if transition and not own_motion_keys:
-            raise ValueError("stage-1 to stage-2 initialization requested but the policy has no motion tensors")
+            raise ValueError("motion-enabled initialization requested but the policy has no motion tensors")
         if transition:
             self.load_state_dict(loaded, strict=False)
-            logger.info("initialized stage 2 from %s; left %d new motion tensors fresh", self.checkpoint_path,
-                        len(own_motion_keys))
+            logger.info("initialized motion-enabled policy from %s; left %d new motion tensors fresh",
+                        self.checkpoint_path, len(own_motion_keys))
         else:
             self.load_state_dict(loaded, strict=True)
             logger.info("loaded complete model state (%d tensors) from %s", len(loaded), self.checkpoint_path)
@@ -926,23 +1104,29 @@ class UniDriveVLAPolicy(nn.Module):
             if task != "planning":
                 raise ValueError(f"policy task {task!r} is only supported during training")
             return_nuscenes_pr10 = features.get("return_nuscenes_pr10", False)
-            if type(return_nuscenes_pr10) is not bool:
-                raise TypeError("return_nuscenes_pr10 must be a bool")
-            if return_nuscenes_pr10:
+            return_nuscenes_pr10_motion = features.get("return_nuscenes_pr10_motion", False)
+            if type(return_nuscenes_pr10) is not bool or type(return_nuscenes_pr10_motion) is not bool:
+                raise TypeError("PR10 export flags must be booleans")
+            if return_nuscenes_pr10 and return_nuscenes_pr10_motion:
+                raise ValueError("choose either PR10 Stage2 scoring or PR10 Stage3 motion scoring")
+            pr10_export = return_nuscenes_pr10 or return_nuscenes_pr10_motion
+            if pr10_export:
+                motion_enabled = bool(self.with_motion or getattr(self.head, "with_motion", False))
                 if (self.profile.name != "nuscenes" or self.profile.frame != "lidar"
-                        or len(self.profile.status_layout) != 10 or self.with_motion
-                        or getattr(self.head, "with_motion", False)
+                        or len(self.profile.status_layout) != 10
+                        or motion_enabled != return_nuscenes_pr10_motion
                         or getattr(self.head, "canbus_sft_prompt", False)):
                     raise ValueError(
-                        "nuscenes_pr10 export is limited to no-ego 10D native-LiDAR nuScenes policies "
-                        "without the motion head"
+                        "PR10 export needs a no-ego 10D native-LiDAR nuScenes policy; Stage2 requires motion off "
+                        "and Stage3 motion export requires motion on"
                     )
                 qwen = self.head.qwen3_vl_with_expert.qwen3_vl
                 if qwen.config.text_config.hidden_size != 2048:
-                    raise ValueError("nuscenes_pr10 export currently requires the 2B Qwen3-VL backbone")
+                    raise ValueError("PR10 nuScenes export currently requires the 2B Qwen3-VL backbone")
             head_inputs = {k: v for k, v in features.items()
-                           if k not in ("task", "coordinate_frame", "native_to_ego", "return_nuscenes_pr10")}
-            if return_nuscenes_pr10:
+                           if k not in ("task", "coordinate_frame", "native_to_ego", "return_nuscenes_pr10",
+                                        "return_nuscenes_pr10_motion")}
+            if pr10_export:
                 # The official 10D status score is the denoiser's prediction, never dataset GT.
                 head_inputs["use_gt_ego_status"] = False
                 head_inputs["return_nuscenes_pr10"] = True
@@ -994,6 +1178,32 @@ class UniDriveVLAPolicy(nn.Module):
                     item["ego_status_pred"] = status[index]
                     exported.append(item)
                 result["nuscenes_pr10"] = exported
+            if return_nuscenes_pr10_motion:
+                det = pred.get("det")
+                batch_size = xy_head.shape[0]
+                if not isinstance(det, list) or len(det) != batch_size:
+                    raise RuntimeError("PR10 Stage3 motion export requires one decoded detection result per sample")
+                exported = []
+                for det_sample in det:
+                    required = {"boxes_3d", "scores_3d", "labels_3d", "trajs_3d", "trajs_score"}
+                    missing = required - set(det_sample)
+                    if missing:
+                        raise RuntimeError(f"PR10 Stage3 motion fields missing: {sorted(missing)}")
+                    boxes = det_sample["boxes_3d"]
+                    trajectories = det_sample["trajs_3d"]
+                    trajectory_scores = det_sample["trajs_score"]
+                    if (not torch.is_tensor(boxes) or boxes.ndim != 2 or boxes.shape[1] < 9
+                            or not torch.is_tensor(trajectories) or trajectories.shape != (len(boxes), 6, 12, 2)
+                            or not torch.is_tensor(trajectory_scores) or trajectory_scores.shape != (len(boxes), 6)):
+                        raise RuntimeError("PR10 Stage3 motion export requires aligned N×6×12×2 trajectories and N×6 scores")
+                    if any(not torch.isfinite(det_sample[key]).all()
+                           for key in ("boxes_3d", "scores_3d", "trajs_3d", "trajs_score")):
+                        raise RuntimeError("PR10 Stage3 motion export contains nonfinite predictions")
+                    item = {key: det_sample[key] for key in required}
+                    if "instance_ids" in det_sample:
+                        item["instance_ids"] = det_sample["instance_ids"]
+                    exported.append(item)
+                result["nuscenes_pr10_motion"] = exported
             det = pred.get("det")
             if det is not None and any("trajs_3d" in sample and "trajs_score" in sample for sample in det):
                 result["det"] = det

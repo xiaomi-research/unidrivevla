@@ -165,7 +165,7 @@ def _loose_center_collision(traj: np.ndarray, gt_box_collision: np.ndarray,
     return result
 
 
-def _nusc_loose(samples: Sequence[tuple], segmentation: Mapping[str, np.ndarray]) -> Dict[str, float]:
+def _nusc_loose(samples: Sequence[tuple], segmentation: Mapping[str, np.ndarray]) -> Dict[str, object]:
     l2_sum = np.zeros(6, np.float64)
     gt_hit_sum = np.zeros(6, np.float64)
     pred_hit_sum = np.zeros(6, np.float64)
@@ -185,8 +185,9 @@ def _nusc_loose(samples: Sequence[tuple], segmentation: Mapping[str, np.ndarray]
         gt_hit_sum += _loose_center_collision(pred_lidar, gt_hit, occ)
         pred_hit_sum += pred_hit & ~gt_hit
         count += 1
-    out: Dict[str, float] = {"loose_samples": count}
+    out: Dict[str, object] = {"loose_samples": count}
     if not count:
+        out["nuscenes/planning_tables"] = _nusc_planning_tables(None, None, None, 0)
         return out
     l2, gt_col, pred_col = l2_sum / count, gt_hit_sum / count, pred_hit_sum / count
     for i in range(6):
@@ -197,7 +198,40 @@ def _nusc_loose(samples: Sequence[tuple], segmentation: Mapping[str, np.ndarray]
     for metric, values in (("L2", l2), ("obj_col", gt_col), ("obj_box_col", pred_col)):
         values_at_seconds = [float(np.mean(values[: 2 * sec])) for sec in SECONDS]
         out[f"nuscenes/loose/{metric}_avg_1_2_3s"] = float(np.mean(values_at_seconds))
+    out["nuscenes/planning_tables"] = _nusc_planning_tables(l2, gt_col, pred_col, count)
     return out
+
+
+def _nusc_planning_tables(l2, gt_col, pred_col, count: int) -> dict:
+    """Keep the printed UniAD/ST-P3 conventions and their sample denominator explicit in JSON."""
+    units = {"L2": "m", "obj_col": "%", "obj_box_col": "%"}
+    if not count:
+        return {
+            name: {"available": False, "samples": 0, "sample_definition": "occupancy-backed predictions",
+                   "units": units, "metrics": {}}
+            for name in ("UniAD", "ST-P3")
+        }
+
+    values = {"L2": l2, "obj_col": gt_col, "obj_box_col": pred_col}
+
+    def table(cumulative: bool) -> dict:
+        report = {"available": True, "samples": int(count),
+                  "sample_definition": "all predictions with segmentation; partial-future rows stay in denominator",
+                  "units": units}
+        for second in SECONDS:
+            indices = slice(0, 2 * second) if cumulative else 2 * second - 1
+            report[f"{second}s"] = {
+                metric: float(np.mean(value[indices]) * (100.0 if metric != "L2" else 1.0))
+                if cumulative else float(value[indices] * (100.0 if metric != "L2" else 1.0))
+                for metric, value in values.items()
+            }
+        report["Avg"] = {
+            metric: float(np.mean([report[f"{second}s"][metric] for second in SECONDS]))
+            for metric in values
+        }
+        return report
+
+    return {"UniAD": table(cumulative=False), "ST-P3": table(cumulative=True)}
 
 
 def _b2d_occupancy(main_boxes: np.ndarray, attrs: np.ndarray) -> np.ndarray:
@@ -291,12 +325,14 @@ def _b2d(samples: Sequence[tuple]) -> Dict[str, float]:
 
 
 def planning_metrics(samples: Sequence[tuple], source: str,
-                     segmentation: Optional[Mapping[str, np.ndarray]] = None) -> Dict[str, float]:
+                     segmentation: Optional[Mapping[str, np.ndarray]] = None) -> Dict[str, object]:
     """Score ``(token, predicted_trajectory, eval_info)`` records with the active main protocol."""
     if source == "nuscenes":
         out = _nusc_strict(samples)
         if segmentation is not None:
             out.update(_nusc_loose(samples, segmentation))
+        else:
+            out["nuscenes/planning_tables"] = _nusc_planning_tables(None, None, None, 0)
         return out
     if source == "b2d":
         return _b2d(samples)

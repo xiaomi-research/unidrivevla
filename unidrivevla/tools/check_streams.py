@@ -100,7 +100,7 @@ class TinyMultiProfilePolicy(nn.Module):
         return {"pred_traj": trajectory, "score": torch.tensor(score)}
 
     def compute_loss(self, features, targets, predictions):
-        return predictions["score"]
+        return predictions["score"] + float(features.get("loss_offset", 0.0))
 
 
 def seed_live_state(policy):
@@ -215,6 +215,20 @@ def check_validate_and_predict_isolation():
         assert first.keys() == second.keys()
         for token in first:
             np.testing.assert_array_equal(first[token], second[token])
+        assert_live_state(policy)
+        assert_modes(policy, modes)
+
+        # FSDP equal-forward padding has no token, so it must not become a metric row.
+        padded_loader = [
+            ({"profile": "nuscenes", "loss_offset": 0.0}, None, ["real-frame"]),
+            ({"profile": "b2d", "loss_offset": 100.0}, None, [None]),
+        ]
+        trainer.val_loader = padded_loader
+        assert trainer.validate() == 1.0
+        assert_live_state(policy)
+        assert_modes(policy, modes)
+        padded_predictions = predict(policy, padded_loader, prediction_context())
+        assert list(padded_predictions) == ["real-frame"]
         assert_live_state(policy)
         assert_modes(policy, modes)
 

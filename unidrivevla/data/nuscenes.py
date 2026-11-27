@@ -25,7 +25,7 @@ from PIL import Image
 from pyquaternion import Quaternion
 from torch.utils.data import Dataset
 
-from unidrivevla.data.registry import register
+from unidrivevla.data.registry import register, validate_pr10_sequence_groups
 from unidrivevla.data.sample import camera, transform_xy, yaw_of
 
 CAMERAS = {"CAM_FRONT": "front", "CAM_FRONT_LEFT": "front_left", "CAM_FRONT_RIGHT": "front_right",
@@ -76,6 +76,10 @@ def boxes_on_axes(boxes, velocity, rotation):
 
 
 class NuScenesSource(Dataset):
+    # The PR10 Stage-2/Stage-3 loader can explicitly opt into the pinned GroupInBatchSampler RNG contract.
+    # The generic sampler checks this marker; other registered sources keep their existing RNG behavior.
+    pr10_sampler_rng_compatible = True
+
     def __init__(self, info_path: str, path_root: str = "", data_root: str = "", version: str = "v1.0-trainval",
                  occ_root: Optional[str] = None, frame: str = "ego"):
         if frame not in ("ego", "lidar"):
@@ -101,6 +105,10 @@ class NuScenesSource(Dataset):
 
     def sequences(self):
         return self.scenes
+
+    def validate_pr10_sampler_groups(self):
+        """Check that scene-token groups equal PR10's empty-sweep sequence boundaries."""
+        return validate_pr10_sequence_groups(self.infos, self.scenes)
 
     def neighbour(self, index: int, step: int) -> Optional[dict]:
         scene, k = self.position[index]

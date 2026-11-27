@@ -70,6 +70,8 @@ include-package-data = true
 unidrivevla = [
     "config/*.yaml",
     "config/*/*.yaml",
+    "references/*.tar.gz",
+    "references/*.json",
     "models/ops/setup.py",
     "models/ops/src/*.cpp",
     "models/ops/src/*.cu",

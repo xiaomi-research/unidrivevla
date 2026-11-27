@@ -3,6 +3,9 @@
 import socket
 import sys
 import tempfile
+from copy import deepcopy
+from dataclasses import asdict
+from types import SimpleNamespace
 from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import patch
@@ -14,10 +17,13 @@ from torch import nn
 from torch.distributed.checkpoint.api import CheckpointException
 from torch.distributed.checkpoint.filesystem import FileSystemReader
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
+from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from unidrivevla.adapters import initialize_for_inference  # noqa: E402
-from unidrivevla.adapters.unidrivevla import UniDriveVLAPolicy  # noqa: E402
+from unidrivevla.adapters.unidrivevla import (  # noqa: E402
+    Profile, UniDriveVLAPolicy, _validate_stage3_checkpoint_config,
+)
 from unidrivevla.distributed.checkpoint import DONE_FILE, ResumeCheckpointer, export_model_state, training_state  # noqa: E402
 from unidrivevla.train.trainer import Trainer, _compute_parameter_dtypes  # noqa: E402
 from unidrivevla.train.optim import MasterAdamW  # noqa: E402
@@ -36,6 +42,55 @@ class TinyPolicy(nn.Module):
             self.motion = nn.Linear(2, 1)
             self.vlm.requires_grad_(False)
             self.lora.requires_grad_(False)
+
+
+class MainNamespacePolicy(UniDriveVLAPolicy):
+    """Small real-initialize fixture with the same planning_head -> head migration as main."""
+
+    def __init__(self, profile, checkpoint_path=None, with_motion=False, train_vlm=True, checkpoint_frame=None,
+                 checkpoint_transition=None, lr=2.0e-4):
+        nn.Module.__init__(self)
+        self.profile = profile
+        self.checkpoint_path = checkpoint_path
+        self.checkpoint_frame = checkpoint_frame
+        self.checkpoint_transition = checkpoint_transition
+        self.lr = lr
+        self.weight_decay, self.warmup_steps, self.warmup_start, self.min_lr_ratio = 1.0e-7, 125, 1.0 / 3, 1.0e-3
+        self.vlm_lr_mult, self.vlm_variant = 0.5, "2b"
+        self.train_vlm = bool(train_vlm)
+        self.with_motion = with_motion
+        self.coc_language_prompt = bool(train_vlm)
+        self.coc_language_loss_weight = 0.1 if train_vlm else 0.0
+        self.coc_jsonl_path = "/data/stage2-coc.jsonl" if train_vlm else ""
+        self.coc_planning_loss_weight = 0.0
+        self._checkpoint_stage3_options = {
+            "weight_decay": self.weight_decay, "warmup_steps": self.warmup_steps,
+            "warmup_start": self.warmup_start, "min_lr_ratio": self.min_lr_ratio,
+            "vlm_lr_mult": self.vlm_lr_mult, "vlm_variant": self.vlm_variant,
+            "gradient_checkpointing": True, "cache_frozen_prefix": True,
+            "attn_implementation": "sdpa", "canbus_sft_prompt": False,
+            "vlm_path": "/weights/qwen", "vae_path": "/weights/vae",
+            "lora": {"r": 64, "lora_alpha": 128, "target_modules": ["q_proj", "v_proj"]},
+            "visual_lora": {"r": 64, "lora_alpha": 128, "target_modules": "projector"},
+            "visual_wasp": {"rank": 64, "alpha": 128, "top_k": 16, "beta": 0.01,
+                            "target_modules": ["qkv", "proj"]},
+            "llm_wasp": {"rank": 64, "alpha": 128, "top_k": 16, "beta": 0.003,
+                         "target_modules": ["q_proj", "v_proj"]},
+            "visual_projector_wasp": None,
+        }
+        self.head = nn.Module()
+        self.head.vlm = nn.Linear(2, 2, bias=False)
+        self.head.visual_wasp = nn.Linear(2, 2, bias=False)
+        self.head.projector_lora = nn.Linear(2, 2, bias=False)
+        self.head.llm_wasp = nn.Linear(2, 2, bias=False)
+        self.head.plan = nn.Linear(2, 1, bias=False)
+        if with_motion:
+            self.head.motion = nn.Linear(2, 1, bias=False)
+        if not train_vlm:
+            self.head.vlm.requires_grad_(False)
+            self.head.visual_wasp.requires_grad_(False)
+            self.head.projector_lora.requires_grad_(False)
+            self.head.llm_wasp.requires_grad_(False)
 
 
 class ComputeDtypePolicy(nn.Module):
@@ -95,6 +150,355 @@ def check(condition, message):
     if not condition:
         raise AssertionError(message)
     print(f"ok   {message}")
+
+
+def check_main_checkpoint_migration(root):
+    profile_path = Path(__file__).resolve().parents[1] / "config" / "profile" / "nuscenes.yaml"
+    profile = Profile.from_config(OmegaConf.load(profile_path))
+    torch.manual_seed(51)
+    stage2 = MainNamespacePolicy(profile, with_motion=False, train_vlm=True)
+    with torch.no_grad():
+        for index, parameter in enumerate(stage2.parameters(), 1):
+            parameter.fill_(float(index) / 10)
+    main_state = {
+        "module.planning_head." + name[len("head."):]: value.detach().clone()
+        for name, value in stage2.state_dict().items()
+    }
+    main_stage2_path = root / "main-stage2-deepspeed.pt"
+    torch.save({"module": main_state, "meta": {"config": "main checkpoint is raw nuScenes LiDAR"}},
+               main_stage2_path)
+
+    stage3 = MainNamespacePolicy(profile, str(main_stage2_path), with_motion=True, train_vlm=False,
+                                 checkpoint_frame="lidar")
+    with torch.no_grad():
+        stage3.head.motion.weight.fill_(9.0)
+    fresh_motion = stage3.head.motion.weight.detach().clone()
+    stage3.initialize()
+    for name, value in stage2.state_dict().items():
+        target_name = "head." + name[len("head."):]
+        check(torch.equal(stage3.state_dict()[target_name], value),
+              f"DeepSpeed Stage2 module/planning_head mapping loads {target_name}")
+    check(torch.equal(stage3.head.motion.weight, fresh_motion),
+          "Stage2-to-Stage3 migration leaves only the new motion branch initialized")
+    check(all(not parameter.requires_grad for name, parameter in stage3.named_parameters()
+              if name.startswith("head.vlm.") or name.startswith("head.visual_wasp.")
+              or name.startswith("head.projector_lora.") or name.startswith("head.llm_wasp.")),
+          "Stage3 freezes the inherited VLM, RESPECT and projector LoRA parameters")
+
+    strict_transition = MainNamespacePolicy(profile, str(main_stage2_path), with_motion=True, train_vlm=False,
+                                            checkpoint_frame="lidar")
+    try:
+        strict_transition.initialize(strict=True)
+    except RuntimeError as exc:
+        check("strict loading" in str(exc), "strict evaluation rejects a Stage2-to-Stage3 partial migration")
+    else:
+        raise AssertionError("strict loading accepted an incomplete Stage2 checkpoint for Stage3 evaluation")
+
+    full_stage3 = MainNamespacePolicy(profile, with_motion=True, train_vlm=False)
+    with torch.no_grad():
+        for index, parameter in enumerate(full_stage3.parameters(), 1):
+            parameter.fill_(float(index) / 7)
+    full_main_state = {
+        "module.planning_head." + name[len("head."):]: value.detach().clone()
+        for name, value in full_stage3.state_dict().items()
+    }
+    main_stage3_path = root / "main-stage3-deepspeed.pt"
+    torch.save({"module": full_main_state, "meta": {"iter": 1}}, main_stage3_path)
+    evaluated = MainNamespacePolicy(profile, str(main_stage3_path), with_motion=True, train_vlm=False,
+                                    checkpoint_frame="lidar")
+    evaluated.initialize(strict=True)
+    check(all(torch.equal(value, evaluated.state_dict()["head." + name[len("head."):]])
+              for name, value in full_stage3.state_dict().items()),
+          "strict evaluation imports a complete DeepSpeed Stage3 module/planning_head checkpoint")
+
+    no_frame = MainNamespacePolicy(profile, str(main_stage2_path), with_motion=True, train_vlm=False)
+    try:
+        no_frame.initialize()
+    except ValueError as exc:
+        check("coordinate-frame provenance" in str(exc), "legacy main checkpoint requires explicit source frame")
+    else:
+        raise AssertionError("legacy LiDAR checkpoint was accepted without frame provenance")
+    wrong_frame = MainNamespacePolicy(profile, str(main_stage2_path), with_motion=True, train_vlm=False,
+                                      checkpoint_frame="ego")
+    try:
+        wrong_frame.initialize()
+    except ValueError as exc:
+        check("does not match target frame" in str(exc), "main checkpoint source frame mismatch is rejected")
+    else:
+        raise AssertionError("wrong-source-frame checkpoint was accepted")
+
+    incomplete_state = dict(main_state)
+    incomplete_state.pop("module.planning_head.projector_lora.weight")
+    incomplete_path = root / "main-stage2-missing-projector.pt"
+    torch.save({"module": incomplete_state}, incomplete_path)
+    incomplete = MainNamespacePolicy(profile, str(incomplete_path), with_motion=True, train_vlm=False,
+                                     checkpoint_frame="lidar")
+    try:
+        incomplete.initialize()
+    except KeyError as exc:
+        check("head.projector_lora.weight" in str(exc),
+              "DeepSpeed migration rejects a missing frozen projector adapter tensor")
+    else:
+        raise AssertionError("DeepSpeed migration silently accepted a missing frozen projector adapter")
+
+
+def check_main_stage3_checkpoint_loading(root):
+    profile_path = Path(__file__).resolve().parents[1] / "config" / "profile" / "nuscenes.yaml"
+    profile = Profile.from_config(OmegaConf.load(profile_path))
+    profile.prefix_max_len = 3840
+    profile.official_attention_mask = False
+    profile.official_command_text = False
+    profile.lr_microstep = True
+    profile.motion_anchor_encoder = "MotionAnchorSineEncoder"
+    torch.manual_seed(79)
+    source = MainNamespacePolicy(profile, with_motion=True, train_vlm=False,
+                                 checkpoint_transition="nusc_2b_stage2_to_stage3", lr=1.0e-4)
+    with torch.no_grad():
+        for index, parameter in enumerate(source.parameters(), 1):
+            parameter.fill_(float(index) / 13)
+    main_state = {
+        "planning_head." + name[len("head."):]: value.detach().clone()
+        for name, value in source.state_dict().items()
+    }
+    native_stage3_path = root / "native-stage3.ckpt"
+    stage3_agent = {
+        "_target_": "unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy",
+        "profile": asdict(profile), "train_vlm": False, "with_motion": True, "lr": 1.0e-4,
+        "coc_language_prompt": False, "coc_language_loss_weight": 0.0, "coc_jsonl_path": "",
+        "coc_planning_loss_weight": 0.0, **source._checkpoint_stage3_options,
+    }
+    torch.save({"state_dict": source.state_dict(),
+                "agent_config": stage3_agent}, native_stage3_path)
+    native_restored = MainNamespacePolicy(profile, str(native_stage3_path), with_motion=True, train_vlm=False,
+                                          checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
+                                          lr=1.0e-4)
+    native_restored.initialize(strict=True)
+    check(all(torch.equal(value, native_restored.state_dict()[name])
+              for name, value in source.state_dict().items()),
+          "strict evaluation loads this repository's native Stage3 checkpoint")
+
+    old_main_stage3_path = root / "old-main-stage3.pt"
+    torch.save({"module": main_state}, old_main_stage3_path)
+    main_restored = MainNamespacePolicy(profile, str(old_main_stage3_path), with_motion=True, train_vlm=False,
+                                        checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
+                                        lr=1.0e-4)
+    main_restored.initialize(strict=True)
+    check(all(torch.equal(value, main_restored.state_dict()["head." + name[len("head."):]])
+              for name, value in source.state_dict().items()),
+          "strict evaluation maps a complete planning_head Stage3 checkpoint")
+
+    stage3_train_start = MainNamespacePolicy(profile, str(old_main_stage3_path), with_motion=True, train_vlm=False,
+                                             checkpoint_frame="lidar",
+                                             checkpoint_transition="nusc_2b_stage2_to_stage3", lr=1.0e-4)
+    try:
+        stage3_train_start.initialize(strict=False)
+    except ValueError as exc:
+        check("same-stage training resume" in str(exc),
+              "dedicated Stage3 training rejects a motion-enabled metadata-free main checkpoint")
+    else:
+        raise AssertionError("Stage3 training accepted a motion-enabled DeepSpeed checkpoint as a Stage2 start")
+
+    extra_state = dict(main_state)
+    extra_state["planning_head.unexpected.weight"] = torch.ones(1)
+    extra_path = root / "old-main-stage3-extra.pt"
+    torch.save({"module": extra_state}, extra_path)
+    extra_target = MainNamespacePolicy(profile, str(extra_path), with_motion=True, train_vlm=False,
+                                      checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
+                                      lr=1.0e-4)
+    try:
+        extra_target.initialize(strict=True)
+    except KeyError as exc:
+        check("unexpected model tensors" in str(exc), "strict main checkpoint rejects unrelated model tensors")
+    else:
+        raise AssertionError("strict loading silently ignored an unexpected main model tensor")
+
+
+def check_stage3_checkpoint_config_contract(root):
+    profile_path = Path(__file__).resolve().parents[1] / "config" / "profile" / "nuscenes.yaml"
+    target_profile = Profile.from_config(OmegaConf.load(profile_path))
+    target_profile.prefix_max_len = 3840
+    target_profile.official_attention_mask = False
+    target_profile.official_command_text = False
+    target_profile.lr_microstep = True
+    target_profile.motion_anchor_encoder = "MotionAnchorSineEncoder"
+    source_profile = asdict(target_profile)
+    source_profile["motion_anchor_encoder"] = None  # Stage 2 has no motion branch.
+    options = {
+        "weight_decay": 1.0e-7, "warmup_steps": 125, "warmup_start": 1.0 / 3,
+        "min_lr_ratio": 1.0e-3, "vlm_lr_mult": 0.5, "vlm_variant": "2b",
+        "gradient_checkpointing": True, "cache_frozen_prefix": True, "attn_implementation": "sdpa",
+        "canbus_sft_prompt": False, "vlm_path": "/weights/qwen", "vae_path": "/weights/vae",
+        "lora": {"r": 64, "lora_alpha": 128, "target_modules": ["q_proj", "v_proj"]},
+        "visual_lora": {"r": 64, "lora_alpha": 128, "target_modules": "projector"},
+        "visual_wasp": {"rank": 64, "alpha": 128, "top_k": 16, "beta": 0.01,
+                         "target_modules": ["qkv", "proj"]},
+        "llm_wasp": {"rank": 64, "alpha": 128, "top_k": 16, "beta": 0.003,
+                      "target_modules": ["q_proj", "v_proj"]},
+        "visual_projector_wasp": None,
+    }
+    source_agent = {
+        "_target_": "unidrivevla.adapters.unidrivevla.UniDriveVLAPolicy",
+        "profile": source_profile,
+        "train_vlm": True, "with_motion": False, "lr": 2.0e-4,
+        "coc_language_prompt": True, "coc_language_loss_weight": 0.1,
+        "coc_jsonl_path": "/data/stage2-coc.jsonl", "coc_planning_loss_weight": 0.0,
+        **deepcopy(options),
+    }
+    target = SimpleNamespace(
+        checkpoint_transition="nusc_2b_stage2_to_stage3", profile=target_profile,
+        train_vlm=False, with_motion=True, lr=1.0e-4, coc_language_prompt=False,
+        coc_language_loss_weight=0.0, coc_jsonl_path="", coc_planning_loss_weight=0.0,
+        _checkpoint_stage3_options=options,
+    )
+    _validate_stage3_checkpoint_config(target, {"agent_config": source_agent}, source_motion=False)
+    check(True, "Stage3 continuation permits only the recorded motion/encoder, CoC-off, freeze, and LR transition")
+
+    # Exercise the same contract through the actual initialize() entry point, not only the validator helper.
+    source_native_profile = deepcopy(target_profile)
+    source_native_profile.motion_anchor_encoder = None
+    source_native = MainNamespacePolicy(source_native_profile, with_motion=False, train_vlm=True,
+                                        checkpoint_frame="lidar", lr=2.0e-4)
+    compatible_path = root / "native-stage2-compatible.ckpt"
+    torch.save({"state_dict": source_native.state_dict(), "agent_config": source_agent}, compatible_path)
+    migrated = MainNamespacePolicy(target_profile, str(compatible_path), with_motion=True, train_vlm=False,
+                                   checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
+                                   lr=1.0e-4)
+    migrated._checkpoint_stage3_options = options
+    migrated.initialize()
+    check(all(torch.equal(source_native.state_dict()[name], migrated.state_dict()[name])
+              for name in source_native.state_dict()),
+          "native Stage2 agent_config passes the dedicated Stage3 continuation through initialize()")
+
+    incompatible_agent = deepcopy(source_agent)
+    incompatible_agent["visual_wasp"]["alpha"] = 256  # same tensor shape; adapter semantics differ
+    incompatible_path = root / "native-stage2-incompatible-adapter.ckpt"
+    torch.save({"state_dict": source_native.state_dict(), "agent_config": incompatible_agent}, incompatible_path)
+    incompatible = MainNamespacePolicy(target_profile, str(incompatible_path), with_motion=True, train_vlm=False,
+                                       checkpoint_frame="lidar", checkpoint_transition="nusc_2b_stage2_to_stage3",
+                                       lr=1.0e-4)
+    incompatible._checkpoint_stage3_options = options
+    try:
+        incompatible.initialize()
+    except ValueError as exc:
+        check("agent.visual_wasp" in str(exc),
+              "initialize() rejects same-shape Stage2 checkpoints with changed WASP alpha")
+    else:
+        raise AssertionError("Stage3 continuation accepted same-shape mismatched adapter metadata")
+
+    generic = MainNamespacePolicy(target_profile, str(incompatible_path), with_motion=True, train_vlm=False,
+                                 checkpoint_frame="lidar", checkpoint_transition=None, lr=1.0e-4)
+    generic.initialize()
+    check(True, "generic Stage2-to-motion fine-tuning remains outside the dedicated compatibility contract")
+
+    stage3_source_agent = deepcopy(source_agent)
+    stage3_source_agent.update({
+        "profile": asdict(target_profile), "train_vlm": False, "with_motion": True,
+        "lr": 1.0e-4, "coc_language_prompt": False, "coc_language_loss_weight": 0.0,
+        "coc_jsonl_path": "", "coc_planning_loss_weight": 0.0,
+        "checkpoint_frame": "lidar",
+        "checkpoint_transition": "nusc_2b_stage2_to_stage3",
+    })
+    stage3_model = MainNamespacePolicy(target_profile, with_motion=True, train_vlm=False,
+                                       checkpoint_frame="lidar", lr=1.0e-4)
+    stage3_path = root / "native-stage3-agent-config.ckpt"
+    torch.save({"state_dict": stage3_model.state_dict(), "agent_config": stage3_source_agent}, stage3_path)
+    from unidrivevla.infer import restore_checkpoint_agent_config
+    infer_cfg = OmegaConf.create({"data_loader": "nuscenes", "profile": {"name": "nuscenes"}, "agent": {}})
+    check(restore_checkpoint_agent_config(infer_cfg, stage3_path),
+          "infer.py restores native Stage3 metadata before strict checkpoint loading")
+    check(infer_cfg.agent.gradient_checkpointing is False,
+          "strict inference applies the existing gradient-checkpointing override")
+    restored_profile = Profile.from_config(OmegaConf.to_container(infer_cfg.agent.profile, resolve=True))
+    infer_target = MainNamespacePolicy(
+        restored_profile, str(stage3_path), with_motion=bool(infer_cfg.agent.with_motion),
+        train_vlm=bool(infer_cfg.agent.train_vlm), checkpoint_frame=infer_cfg.agent.checkpoint_frame,
+        checkpoint_transition=infer_cfg.agent.checkpoint_transition, lr=float(infer_cfg.agent.lr))
+    infer_target._checkpoint_stage3_options["gradient_checkpointing"] = bool(infer_cfg.agent.gradient_checkpointing)
+    infer_target.initialize(strict=True)
+    check(True, "infer.py gradient-checkpointing override passes strict Stage3 metadata compatibility")
+
+    stage3_training_target = MainNamespacePolicy(
+        target_profile, str(stage3_path), with_motion=True, train_vlm=False, checkpoint_frame="lidar",
+        checkpoint_transition="nusc_2b_stage2_to_stage3", lr=1.0e-4)
+    try:
+        stage3_training_target.initialize()
+    except ValueError as exc:
+        check("same-stage training resume" in str(exc),
+              "dedicated Stage2-to-Stage3 training rejects a motion-enabled checkpoint (use DCP resume)")
+    else:
+        raise AssertionError("dedicated Stage3 training accepted a motion-enabled same-stage checkpoint")
+
+    negative_cases = []
+    changed = deepcopy(source_agent)
+    changed["profile"]["official_command_text"] = True
+    negative_cases.append((changed, "profile mismatch"))
+    changed = deepcopy(source_agent)
+    changed["profile"]["delta_mean"][0] += 0.01
+    negative_cases.append((changed, "profile mismatch"))
+    changed = deepcopy(source_agent)
+    changed["profile"]["pose_interval"] = 0.25
+    negative_cases.append((changed, "profile mismatch"))
+    changed = deepcopy(source_agent)
+    changed["visual_wasp"]["alpha"] = 256
+    negative_cases.append((changed, "agent.visual_wasp"))
+    changed = deepcopy(source_agent)
+    changed["visual_wasp"]["top_k"] = 8
+    negative_cases.append((changed, "agent.visual_wasp"))
+    changed = deepcopy(source_agent)
+    changed["llm_wasp"]["beta"] = 0.004
+    negative_cases.append((changed, "agent.llm_wasp"))
+    changed = deepcopy(source_agent)
+    changed["visual_lora"]["lora_alpha"] = 64
+    negative_cases.append((changed, "agent.visual_lora"))
+    for bad_agent, expected in negative_cases:
+        try:
+            _validate_stage3_checkpoint_config(target, {"agent_config": bad_agent}, source_motion=False)
+        except ValueError as exc:
+            check(expected in str(exc), f"Stage3 continuation rejects changed same-shape semantics ({expected})")
+        else:
+            raise AssertionError(f"Stage3 continuation accepted a changed {expected} checkpoint config")
+
+    generic = SimpleNamespace(checkpoint_transition=None)
+    _validate_stage3_checkpoint_config(generic, {"agent_config": negative_cases[0][0]}, source_motion=False)
+    check(True, "generic fine-tuning is not gated by the dedicated Stage3 checkpoint contract")
+    stage3_source = deepcopy(source_agent)
+    stage3_source["train_vlm"], stage3_source["with_motion"] = False, True
+    stage3_source["lr"] = 1.0e-4
+    stage3_source["coc_language_prompt"] = False
+    stage3_source["coc_language_loss_weight"] = 0.0
+    stage3_source["coc_jsonl_path"] = ""
+    stage3_source["profile"]["motion_anchor_encoder"] = "MotionAnchorSineEncoder"
+    stage3_source["profile"]["official_command_text"] = True  # explicit live inference override
+    _validate_stage3_checkpoint_config(target, {"agent_config": stage3_source}, source_motion=True, strict=True)
+    online_profile = deepcopy(target_profile)
+    online_profile.official_command_text = True
+    online_source = MainNamespacePolicy(online_profile, with_motion=True, train_vlm=False,
+                                       checkpoint_frame="lidar", lr=1.0e-4)
+    online_agent = deepcopy(stage3_source_agent)
+    online_agent["profile"] = asdict(online_profile)
+    online_path = root / "native-stage3-online-nav-override.ckpt"
+    torch.save({"state_dict": online_source.state_dict(), "agent_config": online_agent}, online_path)
+    online_target = MainNamespacePolicy(
+        target_profile, str(online_path), with_motion=True, train_vlm=False, checkpoint_frame="lidar",
+        checkpoint_transition="nusc_2b_stage2_to_stage3", lr=1.0e-4)
+    online_target.initialize(strict=True)
+    check(True, "strict Stage3 inference permits only the supported one-hot navigation-text override")
+
+    bad_stage3_agent = deepcopy(stage3_source_agent)
+    bad_stage3_agent["llm_wasp"]["beta"] = 0.004
+    bad_stage3_path = root / "native-stage3-bad-peft.ckpt"
+    torch.save({"state_dict": stage3_model.state_dict(), "agent_config": bad_stage3_agent}, bad_stage3_path)
+    bad_stage3_target = MainNamespacePolicy(
+        target_profile, str(bad_stage3_path), with_motion=True, train_vlm=False, checkpoint_frame="lidar",
+        checkpoint_transition="nusc_2b_stage2_to_stage3", lr=1.0e-4)
+    try:
+        bad_stage3_target.initialize(strict=True)
+    except ValueError as exc:
+        check("agent.llm_wasp" in str(exc), "strict Stage3 inference rejects same-shape PEFT beta drift")
+    else:
+        raise AssertionError("strict Stage3 inference accepted same-shape mismatched PEFT metadata")
+    _validate_stage3_checkpoint_config(target, {"meta": {"legacy_main_ds": True}}, source_motion=False)
+    check(True, "Stage3 online overrides and metadata-free DeepSpeed checkpoints keep their existing paths")
 
 
 def start_cpu_process_group():
@@ -276,6 +680,9 @@ def main():
             check_sparse_optimizer_resume(root, "sgd")
             check_sparse_optimizer_resume(root, "master_adamw")
             check_inference_compute_dtypes(root)
+            check_main_checkpoint_migration(root)
+            check_main_stage3_checkpoint_loading(root)
+            check_stage3_checkpoint_config_contract(root)
             stage1 = TinyPolicy()
             with torch.no_grad():
                 stage1.vlm.weight.fill_(1.25)

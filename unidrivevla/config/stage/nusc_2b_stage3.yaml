@@ -1,0 +1,27 @@
+# @package _global_
+# Continue the Stage 2 recipe: inherit its exact RESPECT/projector/LLM adapters and optimizer/prefix contract,
+# then freeze the VLM, disable CoC, and add the Stage 3 motion task.
+defaults:
+  - nusc_2b_stage2
+  - _self_
+
+profile:
+  motion_anchor_encoder: MotionAnchorSineEncoder
+
+agent:
+  checkpoint_path: ${oc.env:STAGE2_CHECKPOINT}
+  checkpoint_frame: lidar
+  checkpoint_transition: nusc_2b_stage2_to_stage3
+  train_vlm: false
+  with_motion: true
+  lr: 1.0e-4
+  coc_language_prompt: false
+  coc_language_loss_weight: 0.0
+  coc_jsonl_path: ""
+  coc_planning_loss_weight: 0.0
+
+train:
+  max_epochs: 15
+
+evaluator:
+  name: nuscenes_pr10_motion

@@ -21,7 +21,7 @@ from omegaconf import OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from unidrivevla.adapters.unidrivevla import Profile, UniDriveVLAPolicy, geometry_matrix, load_bgr  # noqa: E402
-from unidrivevla.data.registry import SequenceBatchSampler  # noqa: E402
+from unidrivevla.data.registry import SequenceBatchSampler, make_loader, sequence_shard  # noqa: E402
 
 failures = []
 
@@ -59,6 +59,136 @@ check(len(set(starts)) == len(starts), "the slots start on distinct sequence par
 check(same_augment, "a sequence part keeps one augmentation")
 seen = {index for stream in streams for batch in stream for index, _ in batch}
 check(len(seen) == start, f"three epochs visit {len(seen)} of {start} frames")
+
+# 1b. Evaluation must keep whole scenes on one rank, emit every frame once,
+# attach a stream ID, and permit a rank with no assigned scenes.
+class EvalSequences:
+    def __init__(self):
+        self.groups = [[0, 1, 2], [3, 4], [5]]
+        self.scene_for_index = {index: scene for scene, seq in enumerate(self.groups) for index in seq}
+
+    def __len__(self):
+        return 6
+
+    def sequences(self):
+        return self.groups
+
+    def __getitem__(self, index):
+        pose = np.eye(4)
+        pose[0, 3] = index
+        return {"img_metas": {"T_global": pose, "T_global_inv": np.linalg.inv(pose)}}, {}, str(index)
+
+
+eval_source = EvalSequences()
+eval_params = {"batch_size": 1, "num_workers": 0}
+scene_loaders = [make_loader(eval_source, eval_params, False, rank, 4, sequence_eval=True)
+                 for rank in range(4)]
+scene_rows = {}
+for rank, loader in enumerate(scene_loaders):
+    for features, _, tokens in loader:
+        token = int(tokens[0])
+        scene = eval_source.scene_for_index[token]
+        metadata = features["img_metas"][0]
+        assert metadata["stream_id"] == f"scene=sequence={scene}"
+        scene_rows[token] = metadata["stream_id"]
+check(len(scene_rows) == len(eval_source), "scene evaluation covers every frame exactly once")
+scene_ranks = {
+    scene: {rank for rank, loader in enumerate(scene_loaders)
+            if any(eval_source.scene_for_index[int(tokens[0])] == scene
+                   for _, _, tokens in loader)}
+    for scene in range(3)
+}
+check(all(len(ranks) == 1 for ranks in scene_ranks.values()),
+      "each complete scene is assigned to one rank")
+check(len(scene_loaders[3]) == 0, "a rank with no scene assignments has an empty valid loader")
+padded_loaders = [make_loader(eval_source, eval_params, False, rank, 4,
+                              sequence_eval=True, pad_eval=True) for rank in range(4)]
+padded_lengths = [len(loader) for loader in padded_loaders]
+check(len(set(padded_lengths)) == 1 and padded_lengths[0] == 3,
+      "FSDP scene eval pads each rank to the same number of forwards")
+padded_tokens = []
+for loader in padded_loaders:
+    padded_tokens.extend(tokens[0] for _, _, tokens in loader)
+check(sorted(token for token in padded_tokens if token is not None) == [str(i) for i in range(6)]
+      and sum(token is None for token in padded_tokens) == 6,
+      "FSDP padding tokens are marked out and all real frame tokens remain unique")
+from unidrivevla.models.models.instance_bank import InstanceBank
+
+bank = InstanceBank(2, 4, np.zeros((2, 11), np.float32))
+bank.cached_anchor = bank.anchor.detach().unsqueeze(0)
+bank.cached_feature = torch.zeros((1, 2, 4))
+bank.metas = {"timestamp": torch.tensor([0.0], dtype=torch.float64),
+              "img_metas": [{"stream_id": scene_rows[0]}]}
+next_scene = bank.get(1, {"timestamp": torch.tensor([0.05], dtype=torch.float64),
+                          "img_metas": [{"stream_id": scene_rows[3]}]})
+check(next_scene[2] is None and bank.cached_anchor is None,
+      "the instance bank resets its temporal cache at a scene boundary")
+try:
+    sequence_shard([[0, 1], [1, 2]], 0, 2, 3)
+except ValueError:
+    check(True, "scene sharding rejects overlapping frame ownership")
+else:
+    check(False, "scene sharding rejects overlapping frame ownership")
+
+# The non-opt-in path used by other datasets keeps its previous frame-slice behavior.
+legacy_loader = make_loader(eval_source, eval_params, False, 0, 2)
+legacy_features = next(iter(legacy_loader))[0]
+check("stream_id" not in legacy_features["img_metas"][0],
+      "non-nuScenes evaluation keeps its existing metadata behavior")
+
+# Open-loop chooses scene sharding based on the dataset capability, so B2D gets
+# it too while a frame-only source retains the old flat slice.
+from unidrivevla.eval.openloop import OpenLoopEvaluator
+
+
+class RaggedB2DSequences(EvalSequences):
+    def __init__(self):
+        self.groups = [[0, 1, 2], [3, 4, 5], [6, 7], [8, 9]]
+        self.scene_for_index = {index: scene for scene, seq in enumerate(self.groups) for index in seq}
+
+    def __len__(self):
+        return len(self.scene_for_index)
+
+
+class FrameOnly:
+    def __len__(self):
+        return 10
+
+    def __getitem__(self, index):
+        pose = np.eye(4)
+        pose[0, 3] = index
+        return {"img_metas": {"T_global": pose, "T_global_inv": np.linalg.inv(pose)}}, {}, str(index)
+
+
+def openloop_loaders(dataset, world, pad_eval=False):
+    evaluator = object.__new__(OpenLoopEvaluator)
+    evaluator.source = "b2d"
+    return [evaluator.make_eval_loader(dataset, eval_params,
+                                      SimpleNamespace(rank=rank, world_size=world), pad_eval=pad_eval)
+            for rank in range(world)]
+
+
+b2d_source = RaggedB2DSequences()
+b2d_loaders = openloop_loaders(b2d_source, 3)
+b2d_scene_rows = {}
+b2d_scene_ranks = {scene: set() for scene in range(4)}
+for rank, loader in enumerate(b2d_loaders):
+    for features, _, tokens in loader:
+        token = int(tokens[0])
+        scene = b2d_source.scene_for_index[token]
+        b2d_scene_ranks[scene].add(rank)
+        b2d_scene_rows[token] = features["img_metas"][0]["stream_id"]
+check(len(b2d_scene_rows) == 10 and all(len(ranks) == 1 for ranks in b2d_scene_ranks.values()),
+      "B2D open-loop keeps each ragged scene on one rank and covers every frame once")
+b2d_padded = openloop_loaders(b2d_source, 3, pad_eval=True)
+check([len(loader) for loader in b2d_padded] == [5, 5, 5]
+      and sum(token is None for loader in b2d_padded for _, _, tokens in loader for token in tokens) == 5,
+      "B2D FSDP padding equalizes uneven scene shards without adding score rows")
+flat_loaders = openloop_loaders(FrameOnly(), 3)
+check([len(loader) for loader in flat_loaders] == [4, 4, 4]
+      and all("stream_id" not in features["img_metas"][0]
+              for loader in flat_loaders for features, _, _ in loader),
+      "open-loop sources without sequences keep the legacy distributed-sampler path")
 
 # 2. geometry: a bright pixel where a point projects, through flip and rotation
 width, height = 960, 544

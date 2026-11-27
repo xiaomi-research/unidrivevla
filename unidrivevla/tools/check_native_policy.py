@@ -93,7 +93,26 @@ def _batch(prepared):
     return batched, target_batch
 
 
+def _check_action_projection():
+    from unidrivevla.models.unidrivevla.dense_heads.qwenvl3_vla_planning_head import QwenVL3APlanningHead
+
+    head = QwenVL3APlanningHead.__new__(QwenVL3APlanningHead)
+    nn.Module.__init__(head)
+    head.action_out_proj = nn.Linear(3, 2, dtype=torch.bfloat16)
+    head.gradient_checkpointing_enabled = True
+    states = torch.ones(1, 6, 3, dtype=torch.bfloat16, requires_grad=True)
+    output = head._apply_checkpoint(head._project_action_output, states)
+    assert output.dtype == torch.float32
+    expected = nn.functional.linear(states.float(), head.action_out_proj.weight.float(),
+                                   head.action_out_proj.bias.float())
+    torch.testing.assert_close(output, expected)
+    output.sum().backward()
+    assert states.grad is not None and torch.isfinite(states.grad).all()
+    assert head.action_out_proj.weight.grad is not None and torch.isfinite(head.action_out_proj.weight.grad).all()
+
+
 def main():
+    _check_action_projection()
     profile = _profile()
     assert profile.official_attention_mask and profile.prefix_max_len == 3740
     assert head_kwargs(profile, "vlm", None, False, False)["official_attention_mask"] is True

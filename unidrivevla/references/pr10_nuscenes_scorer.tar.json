@@ -1,0 +1,17 @@
+{
+  "revision": "5fce121f4bf04eaf7e109880d4f26eed62c0eed0",
+  "bundle": "pr10_nuscenes_scorer.tar.gz",
+  "sha256": "ceeea55deeb4b4f0dff7c9f3e0b12c3b088bc241bd6568c9f01e1238475ab3aa",
+  "license": "Apache-2.0 (upstream repository LICENSE.txt included)",
+  "source_paths": [
+    "LICENSE.txt",
+    "nuScenes/projects/__init__.py",
+    "nuScenes/projects/mmdet3d_plugin/__init__.py",
+    "nuScenes/projects/mmdet3d_plugin/core/box3d.py",
+    "nuScenes/projects/mmdet3d_plugin/datasets",
+    "nuScenes/projects/configs/UniDriveVLA/unidrivevla_nusc_2b_stage2.py",
+    "nuScenes/projects/configs/UniDriveVLA/unidrivevla_nusc_2b_stage3.py"
+  ],
+  "build": "git archive with core.autocrlf=false and tar.umask=0000; gzip mtime=0",
+  "purpose": "PR10 NuScenes3DDataset Stage2 and Stage3 CPU evaluation only; no models or checkpoints"
+}

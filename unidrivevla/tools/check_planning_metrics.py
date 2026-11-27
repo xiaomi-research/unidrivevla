@@ -174,6 +174,32 @@ def nusc_checks(main):
                           torch.tensor(valid_mask[None]), torch.tensor(occupancy[None]))
     expected_loose = loose_main.compute()
     close(loose["loose_samples"], 2, "loose occupancy denominator includes incomplete future")
+    tables = loose["nuscenes/planning_tables"]
+    uniad, stp3 = tables["UniAD"], tables["ST-P3"]
+    for name, table in (("UniAD", uniad), ("ST-P3", stp3)):
+        close(table["samples"], 2, f"{name} planning-table sample count")
+        if (not table["available"]
+                or table["sample_definition"] != "all predictions with segmentation; partial-future rows stay in denominator"
+                or table["units"] != {"L2": "m", "obj_col": "%", "obj_box_col": "%"}):
+            raise AssertionError(f"{name} planning table must be available with meter/percent units")
+    for metric in ("L2", "obj_col", "obj_box_col"):
+        source = expected_loose[metric].detach().cpu().numpy()
+        for second, index in ((1, 1), (2, 3), (3, 5)):
+            scale = 100 if metric != "L2" else 1
+            close(uniad[f"{second}s"][metric], source[index] * scale, f"UniAD raw {metric} at {second}s")
+            expected_cumulative = np.mean(source[:2 * second]) * scale
+            close(stp3[f"{second}s"][metric], expected_cumulative, f"ST-P3 cumulative {metric} at {second}s")
+        uniad_avg = np.mean(source[[1, 3, 5]]) * scale
+        stp3_avg = np.mean([np.mean(source[:2 * second]) for second in (1, 2, 3)]) * scale
+        close(uniad["Avg"][metric], uniad_avg, f"UniAD 1/2/3s average {metric}")
+        close(stp3["Avg"][metric], stp3_avg, f"ST-P3 1/2/3s average {metric}")
+        # The original flat keys remain fractions for collision, preserving existing callers.
+        old_key = f"nuscenes/loose/{metric}_avg_1_2_3s"
+        close(loose[old_key], stp3_avg / scale, f"legacy {old_key} remains unchanged")
+    unavailable = planning_metrics(records, "nuscenes")
+    for table in unavailable["nuscenes/planning_tables"].values():
+        if table["available"] or table["samples"] != 0:
+            raise AssertionError("missing occupancy must not fabricate named planning-table values")
     for i in range(6):
         key = f"nuscenes/loose/{(i + 1) / 2:g}s"
         close(loose[f"{key}/L2"], expected_loose["L2"][i], f"loose L2 step {i}")

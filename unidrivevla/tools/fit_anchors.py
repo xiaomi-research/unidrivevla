@@ -1,4 +1,4 @@
-"""python tools/fit_anchors.py data=navsim|nuscenes|b2d [hydra overrides] [--stride N] [--out DIR]
+"""python tools/fit_anchors.py data=navsim|nuscenes|b2d [hydra overrides] [--stride N] [--out DIR] [--seed N]
 
 k-means anchors of a source's training split, written to the profile's frame-specific anchors_dir:
   det_900.npy     (900, 11)                box centres within 55 m; log size 1, heading forward, no velocity
@@ -7,6 +7,9 @@ k-means anchors of a source's training split, written to the profile's frame-spe
   motion_6.npy    (classes, 6, steps, 2)   per class, full-length futures within 55 m in the agent's own frame
 Native LiDAR mode reads raw main annotations and follows each dataset's official k-means settings. Its output directory
 is separate from legacy ego-frame anchors. Existing files are never replaced unless --replace-existing is supplied.
+This fits new anchors; it cannot reproduce the original arrays. For checkpoint reproduction, import and verify the
+original files with `tools/check_nuscenes_anchors.py`. A supplied seed makes a new fit repeatable within the same
+NumPy/scikit-learn/data environment; it does not turn the result into the original initialization.
 Run it on the full training split: anchors of a subset are not the official ones.
 """
 
@@ -45,21 +48,23 @@ def kmeans(points: np.ndarray, k: int, seed: int = 0) -> np.ndarray:
     return model.fit(points).cluster_centers_
 
 
-def map_segments(centres: np.ndarray, points: int, b2d: bool, seed: int = 0, native: bool = False) -> np.ndarray:
+def map_segments(centres: np.ndarray, points: int, b2d: bool, seed=None, native: bool = False) -> np.ndarray:
     """(K, points, 2): each centre spread into a polyline, as the official kmeans_map scripts."""
     if not b2d:
         offsets = np.stack([np.zeros(points), np.linspace(-4, 4, points)], -1) if native else \
             np.stack([np.linspace(-4, 4, points), np.zeros(points)], -1)
         return centres[:, None] + offsets[None]
     if native:
+        rng = None if seed is None else np.random.default_rng(seed)
         out = []
         for centre in centres:
-            length = np.random.uniform(8, 20, 10)[0]
-            along = np.random.uniform() < 0.7
+            uniform = np.random.uniform if rng is None else rng.uniform
+            length = uniform(8, 20, 10)[0]
+            along = uniform() < 0.7
             line = np.linspace(-length / 2, length / 2, points)
             out.append(centre + np.stack([np.zeros(points), line] if along else [line, np.zeros(points)], -1))
         return np.stack(out)
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(0 if seed is None else seed)
     out = []
     for centre in centres:
         line = np.linspace(-0.5, 0.5, points) * rng.uniform(8, 20)
@@ -161,6 +166,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stride", type=int, default=1, help="use every N-th training sample")
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--seed", type=int, help="seed a new fit; default preserves official native KMeans randomness")
     parser.add_argument("--replace-existing", action="store_true", help="replace existing anchor files explicitly")
     parser.add_argument("--development-fill-missing-motion", action="store_true",
                         help="fill underpopulated native motion classes with zero anchors for smoke construction only")
@@ -173,7 +179,7 @@ def main() -> None:
     steps = profile.motion_steps
     b2d = profile.name == "b2d"
     native = profile.frame == "lidar"
-    seed = None if native else 0  # native follows the official KMeans(n_clusters=k) defaults
+    seed = args.seed if args.seed is not None else (None if native else 0)
     centres, lines, motion = [], [], [[] for _ in profile.det_classes]
     out = args.out or Path(profile.anchors_dir)
     names = ("det_900.npy", "map_100.npy", "motion_6.npy")
@@ -220,7 +226,7 @@ def main() -> None:
     det = np.concatenate([det, np.tile(det_suffix, (K_DET, 1))], axis=1).astype(np.float32)
 
     map_centres = kmeans(np.stack(lines), K_MAP, seed=seed)
-    map_anchors = map_segments(map_centres, profile.map_points, b2d, native=native).astype(np.float32)
+    map_anchors = map_segments(map_centres, profile.map_points, b2d, seed=seed, native=native).astype(np.float32)
 
     clusters = []
     for name, tracks in zip(profile.det_classes, motion):
@@ -240,8 +246,11 @@ def main() -> None:
         if path.exists() and not args.replace_existing:
             raise FileExistsError(f"refusing to replace existing anchor file {path}; pass --replace-existing explicitly")
         np.save(path, array)
+    from sklearn import __version__ as sklearn_version
+
     print(f"anchors of {len(range(0, len(dataset), args.stride))} samples ({sum(map(len, centres))} boxes, "
-          f"{len(lines)} lines, {sum(map(len, motion))} tracks) -> {out}")
+          f"{len(lines)} lines, {sum(map(len, motion))} tracks); seed={seed}, "
+          f"numpy={np.__version__}, sklearn={sklearn_version} -> {out}")
 
 
 if __name__ == "__main__":

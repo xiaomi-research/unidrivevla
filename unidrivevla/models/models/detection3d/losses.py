@@ -70,7 +70,10 @@ class SparseBox3DLoss(nn.Module):
 
         if quality is not None:
             cns = quality[..., CNS]
-            yns = quality[..., YNS].sigmoid()
+            yaw_logit = quality[..., YNS]
+            if yaw_logit.dtype in (torch.bfloat16, torch.float16):
+                yaw_logit = yaw_logit.float()
+            yns = yaw_logit.sigmoid()
             cns_target = torch.norm(
                 box_target[..., [X, Y, Z]] - box[..., [X, Y, Z]], p=2, dim=-1
             )

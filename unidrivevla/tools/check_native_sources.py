@@ -107,7 +107,7 @@ def main():
     assert native_ns.delta_mean == [0.0233, 2.2707] and native_ns.delta_std == [0.3427, 1.8668]
     assert native_b2d.delta_mean == [-0.0222, 2.0249] and native_b2d.delta_std == [0.672, 1.8586]
     assert native_ns.map_roi == native_b2d.map_roi == [30.0, 60.0]
-    assert native_ns.ego_box == [0.0, 0.5, -1.06, 4.08, 1.73, 1.56, 0.0]
+    assert native_ns.ego_box == [0.0, 0.5, -1.06, 4.08, 1.73, 1.56, 1.5707963267948966]
     assert native_b2d.ego_box == [0.0, 0.5, -1.095, 4.89, 1.84, 1.49, 0.0]
 
     with tempfile.TemporaryDirectory(prefix="unidrive-native-check-") as directory:

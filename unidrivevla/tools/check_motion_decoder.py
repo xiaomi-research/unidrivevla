@@ -233,6 +233,91 @@ def check_profile_gate_and_checkpoint_neutrality():
     assert not list(native.__dict__.values()) or all(not torch.is_tensor(v) for v in native.__dict__.values())
 
 
+def check_stage3_motion_encoder_and_ego_anchor():
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+
+    from unidrivevla.adapters.unidrivevla import Profile, head_kwargs
+    from unidrivevla.models.compat import Linear, PLUGIN_LAYERS, POSITIONAL_ENCODING, build_from_cfg
+    from unidrivevla.models.models.attention import gen_sineembed_for_position
+    from unidrivevla.models.models.blocks import linear_relu_ln
+    import unidrivevla.models.models.detection3d.detection3d_blocks  # noqa: F401
+    import unidrivevla.models.models.ego.instance_bank  # noqa: F401
+
+    config_dir = ROOT / "unidrivevla" / "config"
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir.resolve()),
+                               job_name="check_nusc_stage3_motion_encoder"):
+        stage3 = compose(config_name="train", overrides=["data=nuscenes", "stage=nusc_2b_stage3"])
+    profile = Profile.from_config(OmegaConf.to_container(stage3.profile, resolve=True))
+    assert profile.motion_anchor_encoder == "MotionAnchorSineEncoder"
+    decoder = head_kwargs(profile, "unused-vlm", None, train_vlm=False, with_motion=True)["unified_decoder_cfg"]
+    encoder_cfg = decoder["motion_anchor_encoder"]
+    assert encoder_cfg == {"type": "MotionAnchorSineEncoder", "embed_dims": 256}
+
+    torch.manual_seed(241)
+    encoder = build_from_cfg(encoder_cfg, POSITIONAL_ENCODING)
+    torch.manual_seed(241)
+    reference = nn.Sequential(*linear_relu_ln(256, 1, 1), Linear(256, 256))
+    expected_keys = {"encoder.0.weight", "encoder.0.bias", "encoder.2.weight", "encoder.2.bias",
+                     "encoder.3.weight", "encoder.3.bias"}
+    assert set(encoder.state_dict()) == expected_keys
+    assert sum(parameter.numel() for parameter in encoder.parameters()) == 132096
+    for name, value in reference.state_dict().items():
+        torch.testing.assert_close(encoder.state_dict()[f"encoder.{name}"], value, rtol=0, atol=0)
+
+    positions = torch.tensor([[[0.1, 0.25], [-0.5, 0.75], [1.0, -0.25]],
+                              [[0.0, 0.0], [0.4, -0.8], [-0.2, 0.6]]])
+    sine_embed = gen_sineembed_for_position(positions)
+    assert sine_embed.shape == (2, 3, 256)
+    torch.testing.assert_close(encoder(sine_embed), reference(sine_embed), rtol=0, atol=0)
+
+    def build_ego_bank(profile):
+        bank_cfg = head_kwargs(profile, "unused-vlm", None, train_vlm=False,
+                               with_motion=False)["unified_decoder_cfg"]["ego_instance_bank"]
+        return build_from_cfg(bank_cfg, PLUGIN_LAYERS)
+
+    config_root = ROOT / "unidrivevla" / "config" / "profile"
+    old_native = Profile.from_config(OmegaConf.to_container(OmegaConf.load(config_root / "nuscenes.yaml"),
+                                                             resolve=True))
+    assert old_native.motion_anchor_encoder is None  # metadata predating the Stage3 field keeps the legacy encoder
+    old_native.ego_box[-1] = 0.0
+    assert head_kwargs(old_native, "unused-vlm", None, train_vlm=False,
+                       with_motion=True)["unified_decoder_cfg"]["motion_anchor_encoder"]["type"] \
+        == "SparseBox3DEncoder"
+    old_native_bank = build_ego_bank(old_native)
+    old_saved_state = old_native_bank.state_dict()
+
+    native_bank = build_ego_bank(profile)
+    expected_anchor = torch.tensor([[0.0, 0.5, -1.06, np.log(4.08), np.log(1.73), np.log(1.56),
+                                     1.0, 0.0, 0.0, 0.0, 0.0]], dtype=torch.float32)
+    torch.testing.assert_close(native_bank.anchor.detach(), expected_anchor, rtol=0, atol=1e-6)
+    assert native_bank.state_dict()["anchor"].shape == old_saved_state["anchor"].shape == (1, 11)
+    native_bank.load_state_dict(old_saved_state, strict=True)
+    torch.testing.assert_close(native_bank.anchor[0, 6:8], torch.tensor([0.0, 1.0]), rtol=0, atol=0)
+
+    legacy = Profile.from_config(OmegaConf.to_container(OmegaConf.load(config_root / "nuscenes_ego.yaml"),
+                                                         resolve=True))
+    b2d = Profile.from_config(OmegaConf.to_container(OmegaConf.load(config_root / "b2d.yaml"), resolve=True))
+    for unchanged in (legacy, b2d):
+        bank = build_ego_bank(unchanged)
+        torch.testing.assert_close(bank.anchor[0, 6:8], torch.tensor([0.0, 1.0]), rtol=0, atol=0)
+        assert head_kwargs(unchanged, "unused-vlm", None, train_vlm=False,
+                           with_motion=True)["unified_decoder_cfg"]["motion_anchor_encoder"]["type"] \
+            == "SparseBox3DEncoder"
+
+    lead_cfg = OmegaConf.to_container(OmegaConf.load(config_root / "lead.yaml"), resolve=False)
+    lead_cfg["delta_mean"], lead_cfg["delta_std"] = [0.0, 0.0], [1.0, 1.0]
+    lead = Profile.from_config(lead_cfg)
+    lead_decoder = head_kwargs(lead, "unused-vlm", None, train_vlm=False,
+                               with_motion=True)["unified_decoder_cfg"]
+    assert lead.ego_box[-1] == 0.0
+    if lead.prompt_style == "lead_pr10":
+        assert Path(lead_decoder["ego_instance_bank"]["ego_anchor"]).name == "lead_ego_anchor.npy"
+    else:
+        torch.testing.assert_close(build_ego_bank(lead).anchor[0, 6:8], torch.tensor([0.0, 1.0]), rtol=0, atol=0)
+    assert lead_decoder["motion_anchor_encoder"]["type"] == "SparseBox3DEncoder"
+
+
 def check_policy_inference_contract():
     from types import SimpleNamespace
 
@@ -271,9 +356,11 @@ def main():
     check_decoder_parity(MainSparseMotionDecoder)
     check_post_process_and_no_motion_stage(MainSparseMotionDecoder, MainSparseBox3DDecoder)
     check_profile_gate_and_checkpoint_neutrality()
+    check_stage3_motion_encoder_and_ego_anchor()
     check_policy_inference_contract()
     print("PASS main SparseMotionDecoder CPU oracle: top-k, quality/order, threshold masks, IDs, layer selection")
     print("PASS stage gating, no-motion output, state-dict neutrality, and policy native-frame contract")
+    print("PASS Stage3 sine encoder construction/initialization and nuScenes native ego-anchor orientation")
 
 
 if __name__ == "__main__":

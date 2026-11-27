@@ -14,7 +14,8 @@ CHECKS = ("checkpoint", "resume", "master_adamw", "vqa", "task_schedule", "targe
           "external_eval", "eval_schedule", "b2d_closedloop", "insulation", "attention_contract", "run_paths",
           "eval_failures", "native_sources", "native_policy", "sequences", "motion_decoder", "optional_attention",
           "gradient_reduction", "release_recipes", "release_sample_loss", "navsim_occ_loader", "navsim_scores",
-          "coc_link", "peft_trainability", "lead_closedloop", "lead_entrypoints", "nuscenes_pr10_eval")
+          "coc_link", "peft_trainability", "lead_closedloop", "lead_entrypoints", "nuscenes_pr10_eval",
+          "nusc_training_losses", "nuscenes_anchors", "nuscenes_pr10_rng")
 
 
 def main():
@@ -38,7 +39,10 @@ def main():
         start = time.monotonic()
         with log.open("w", encoding="utf-8") as stream:
             try:
-                run = subprocess.run([sys.executable, "-B", str(path)], cwd=str(tools.parents[1]), env=env,
+                command = [sys.executable, "-B", str(path)]
+                if name == "nuscenes_anchors":
+                    command.append("--self-test")
+                run = subprocess.run(command, cwd=str(tools.parents[1]), env=env,
                                      stdout=stream, stderr=subprocess.STDOUT, timeout=args.timeout)
                 code = run.returncode
             except subprocess.TimeoutExpired:

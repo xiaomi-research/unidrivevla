@@ -53,13 +53,17 @@ class OpenLoopEvaluator:
             policy = select_policy(self.source) if callable(select_policy) else trainer.agent
             self.dataset = LOADERS[self.source](source_cfg, policy, "val")
             self.loader = self.make_eval_loader(with_worker_transform(self.dataset, policy),
-                                                evaluation_params(trainer.cfg), trainer.ctx)
+                                                evaluation_params(trainer.cfg), trainer.ctx,
+                                                pad_eval=trainer.args.strategy == "fsdp")
         return self.loader
 
-    def make_eval_loader(self, dataset, params, ctx):
+    def make_eval_loader(self, dataset, params, ctx, pad_eval=False):
         from unidrivevla.data import make_loader
+        from unidrivevla.data.registry import dataset_of
 
-        return make_loader(dataset, params, False, ctx.rank, ctx.world_size)
+        sequence_eval = callable(getattr(dataset_of(dataset), "sequences", None))
+        return make_loader(dataset, params, False, ctx.rank, ctx.world_size,
+                           sequence_eval=sequence_eval, pad_eval=pad_eval and sequence_eval)
 
     def during_training(self, trainer, ckpt: Path, tag: str) -> None:
         """Called on every rank with the model holding the weights to score."""

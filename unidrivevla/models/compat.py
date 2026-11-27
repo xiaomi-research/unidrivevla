@@ -205,13 +205,17 @@ def reduce_mean(tensor):
 def _reduce(loss, weight, reduction, avg_factor):
     if weight is not None:
         loss = loss * weight
-    if avg_factor is not None:
-        return loss.sum() / avg_factor
+    if reduction == "none":
+        return loss
     if reduction == "mean":
-        return loss.mean()
+        if avg_factor is None:
+            return loss.mean()
+        return loss.sum() / (avg_factor + torch.finfo(torch.float32).eps)
     if reduction == "sum":
+        if avg_factor is not None:
+            raise ValueError("avg_factor cannot be used with sum reduction")
         return loss.sum()
-    return loss
+    raise ValueError(f"unsupported reduction: {reduction!r}")
 
 
 def l1_loss(pred, target, weight=None, reduction="mean", avg_factor=None, **kwargs):
@@ -270,16 +274,29 @@ class FocalLoss(_LossBase):
         pt = prob * target + (1 - prob) * (1 - target)
         alpha = self.alpha * target + (1 - self.alpha) * (1 - target)
         loss = alpha * (1 - pt).pow(self.gamma) * ce
+        if torch.is_tensor(weight) and weight.shape != loss.shape:
+            if weight.shape == loss.shape[:-1]:
+                weight = weight.unsqueeze(-1)
+            elif weight.numel() == loss.numel():
+                weight = weight.reshape_as(loss)
         return self.loss_weight * _reduce(loss, weight, reduction, avg_factor)
 
 
 class GaussianFocalLoss(_LossBase):
+    """Gaussian focal loss on probabilities, as used by the detector's yawness head."""
+
+    def __init__(self, loss_weight=1.0, reduction="mean", *, alpha=2.0, gamma=4.0):
+        super().__init__(loss_weight, reduction)
+        self.alpha = alpha
+        self.gamma = gamma
+
     def forward(self, pred, target, weight=None, avg_factor=None, reduction_override=None, **kwargs):
         reduction = reduction_override or self.reduction
-        pred = pred.sigmoid().clamp(1e-6, 1 - 1e-6)
-        pos = target.eq(1).float()
-        neg = target.lt(1).float()
-        loss = -(pos * (1 - pred).pow(2) * pred.log() + neg * (1 - target).pow(4) * pred.pow(2) * (1 - pred).log())
+        if pred.dtype in (torch.float16, torch.bfloat16):
+            pred = pred.float()
+        positive = -(pred + 1e-12).log() * (1 - pred).pow(self.alpha) * target.eq(1)
+        negative = -(1 - pred + 1e-12).log() * pred.pow(self.alpha) * (1 - target).pow(self.gamma)
+        loss = positive + negative
         return self.loss_weight * _reduce(loss, weight, reduction, avg_factor)
 
 

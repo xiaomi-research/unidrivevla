@@ -25,7 +25,7 @@ map_classes: [ped_crossing, divider, boundary]
 map_roi: [30.0, 60.0]       # official roi_size=(30, 60), in native LiDAR coordinate order
 map_clip: false                # the extractor's lines are cut to the LiDAR-frame ROI; VectorizeMap does not cut again
 ground_height: -1.84023
-ego_box: [0.0, 0.5, -1.06, 4.08, 1.73, 1.56, 0.0] # EgoInstanceBank anchor_type='nus'
+ego_box: [0.0, 0.5, -1.06, 4.08, 1.73, 1.56, 1.5707963267948966] # main's nus anchor has SIN_YAW/COS_YAW=[1, 0]
 motion_velocity_weight: 0.5    # the official stage 2's detection reg_weights (Bench2Drive's keeps 0)
 train_resize: 0.6              # its data_aug_conf resize_lim: 1600 x 900 -> 960 x 540, cropped to image_hw
 occ_classes: 18
